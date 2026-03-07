@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TFEX Trading Journal — บันทึกการเทรด</title>
+    <meta
+      name="description"
+      content="เว็บแอปบันทึกข้อมูลการเทรด TFEX พร้อม Dashboard วิเคราะห์ผลการเทรด"
+    />
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Noto+Sans+Thai:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 32 32" fill="none">
+            <rect
+              x="2"
+              y="8"
+              width="28"
+              height="16"
+              rx="3"
+              stroke="currentColor"
+              stroke-width="2"
+            />
+            <path
+              d="M8 18L12 12L16 16L20 10L24 14"
+              stroke="url(#brandGrad)"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <defs>
+              <linearGradient id="brandGrad" x1="8" y1="18" x2="24" y2="10">
+                <stop stop-color="#00d4aa" />
+                <stop offset="1" stop-color="#7c5cfc" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>TFEX Journal</h1>
+          <span class="brand-sub">Trading Tracker</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a
+          href="#dashboard"
+          class="nav-link active"
+          data-page="dashboard"
+          id="nav-dashboard"
+        >
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#record" class="nav-link" data-page="record" id="nav-record">
+          <i data-lucide="plus-circle"></i>
+          <span>บันทึกการเทรด</span>
+        </a>
+        <a href="#trades" class="nav-link" data-page="trades" id="nav-trades">
+          <i data-lucide="list"></i>
+          <span>ประวัติการเทรด</span>
+        </a>
+        <a
+          href="#settings"
+          class="nav-link"
+          data-page="settings"
+          id="nav-settings"
+        >
+          <i data-lucide="settings"></i>
+          <span>ตั้งค่า</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot offline"></span>
+          <span class="status-text">ยังไม่เชื่อมต่อ</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Mobile Header -->
+    <header class="mobile-header" id="mobileHeader">
+      <button class="menu-toggle" id="menuToggle">
+        <i data-lucide="menu"></i>
+      </button>
+      <span class="mobile-title">TFEX Journal</span>
+      <div class="mobile-status" id="mobileStatus">
+        <span class="status-dot offline"></span>
+      </div>
+    </header>
+
+    <!-- Overlay for mobile sidebar -->
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <!-- Main Content -->
+    <main class="main-content" id="mainContent">
+      <!-- ==================== DASHBOARD PAGE ==================== -->
+      <section class="page active" id="page-dashboard">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">Dashboard</h2>
+            <p class="page-subtitle">ภาพรวมผลการเทรดของคุณ</p>
+          </div>
+          <div class="page-actions">
+            <select id="dashboardFilter" class="filter-select">
+              <option value="all">ทั้งหมด</option>
+              <option value="7">7 วันล่าสุด</option>
+              <option value="30">30 วันล่าสุด</option>
+              <option value="90">90 วันล่าสุด</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-grid" id="summaryCards">
+          <div class="summary-card gradient-green">
+            <div class="card-icon"><i data-lucide="wallet"></i></div>
+            <div class="card-content">
+              <span class="card-label">กำไร/ขาดทุนสุทธิ</span>
+              <span class="card-value" id="totalNetPnl">฿0</span>
+            </div>
+          </div>
+          <div class="summary-card gradient-blue">
+            <div class="card-icon"><i data-lucide="target"></i></div>
+            <div class="card-content">
+              <span class="card-label">Win Rate</span>
+              <span class="card-value" id="winRate">0%</span>
+            </div>
+          </div>
+          <div class="summary-card gradient-purple">
+            <div class="card-icon"><i data-lucide="bar-chart-3"></i></div>
+            <div class="card-content">
+              <span class="card-label">จำนวนเทรด</span>
+              <span class="card-value" id="totalTrades">0</span>
+            </div>
+          </div>
+          <div class="summary-card gradient-orange">
+            <div class="card-icon"><i data-lucide="trending-up"></i></div>
+            <div class="card-content">
+              <span class="card-label">Avg P&L / Trade</span>
+              <span class="card-value" id="avgPnl">฿0</span>
+            </div>
+          </div>
+          <div class="summary-card gradient-red">
+            <div class="card-icon"><i data-lucide="trending-down"></i></div>
+            <div class="card-content">
+              <span class="card-label">Max Drawdown</span>
+              <span class="card-value" id="maxDrawdown">฿0</span>
+            </div>
+          </div>
+          <div class="summary-card gradient-cyan">
+            <div class="card-icon"><i data-lucide="trophy"></i></div>
+            <div class="card-content">
+              <span class="card-label">Profit Factor</span>
+              <span class="card-value" id="profitFactor">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+          <div class="chart-card wide">
+            <div class="chart-header">
+              <h3>Equity Curve</h3>
+            </div>
+            <div class="chart-body">
+              <canvas id="equityCurveChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>Daily P&L</h3>
+            </div>
+            <div class="chart-body">
+              <canvas id="dailyPnlChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>Win / Loss</h3>
+            </div>
+            <div class="chart-body">
+              <canvas id="winLossChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>P&L by Strategy</h3>
+            </div>
+            <div class="chart-body">
+              <canvas id="strategyChart"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>P&L by Symbol</h3>
+            </div>
+            <div class="chart-body">
+              <canvas id="symbolChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="card recent-trades-card">
+          <div class="card-header-bar">
+            <h3>เทรดล่าสุด</h3>
+            <a href="#trades" class="see-all-link" data-page="trades"
+              >ดูทั้งหมด →</a
+            >
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table" id="recentTradesTable">
+              <thead>
+                <tr>
+                  <th>วันที่</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>สัญญา</th>
+                  <th>Net P&L</th>
+                </tr>
+              </thead>
+              <tbody id="recentTradesBody">
+                <tr>
+                  <td colspan="7" class="empty-state">ยังไม่มีข้อมูล</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== RECORD PAGE ==================== -->
+      <section class="page" id="page-record">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">บันทึกการเทรด</h2>
+            <p class="page-subtitle">เพิ่มข้อมูลการเทรดใหม่</p>
+          </div>
+        </div>
+
+        <div class="record-layout">
+          <div class="card form-card">
+            <form id="tradeForm" autocomplete="off">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="tradeDate"
+                    >วันที่ <span class="required">*</span></label
+                  >
+                  <input type="date" id="tradeDate" required />
+                </div>
+                <div class="form-group">
+                  <label for="tradeSymbol"
+                    >Symbol <span class="required">*</span></label
+                  >
+                  <select id="tradeSymbol" required>
+                    <option value="">เลือก Symbol</option>
+                    <option value="S50">S50 (SET50 Index Futures)</option>
+                    <option value="GF">Gold Futures (GF)</option>
+                    <option value="GFM">Gold-D (GFM)</option>
+                    <option value="SIF">Single Stock Futures (SIF)</option>
+                    <option value="DW">DW</option>
+                    <option value="Other">อื่นๆ</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="tradeSide"
+                    >Side <span class="required">*</span></label
+                  >
+                  <div class="side-toggle">
+                    <input
+                      type="radio"
+                      name="tradeSide"
+                      id="sideLong"
+                      value="Long"
+                      checked
+                    />
+                    <label for="sideLong" class="side-btn long-btn">
+                      <i data-lucide="arrow-up-right"></i> Long
+                    </label>
+                    <input
+                      type="radio"
+                      name="tradeSide"
+                      id="sideShort"
+                      value="Short"
+                    />
+                    <label for="sideShort" class="side-btn short-btn">
+                      <i data-lucide="arrow-down-right"></i> Short
+                    </label>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="tradeEntry"
+                    >ราคาเข้า (Entry) <span class="required">*</span></label
+                  >
+                  <input
+                    type="number"
+                    id="tradeEntry"
+                    step="any"
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="tradeExit"
+                    >ราคาออก (Exit) <span class="required">*</span></label
+                  >
+                  <input
+                    type="number"
+                    id="tradeExit"
+                    step="any"
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="tradeContracts"
+                    >จำนวนสัญญา <span class="required">*</span></label
+                  >
+                  <input
+                    type="number"
+                    id="tradeContracts"
+                    min="1"
+                    value="1"
+                    required
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="tradeCommission">ค่าคอมมิชชั่น (฿)</label>
+                  <input
+                    type="number"
+                    id="tradeCommission"
+                    step="any"
+                    value="0"
+                    placeholder="0"
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="tradeStrategy">Strategy</label>
+                  <input
+                    type="text"
+                    id="tradeStrategy"
+                    placeholder="เช่น Breakout, Trend Follow"
+                    list="strategyList"
+                  />
+                  <datalist id="strategyList">
+                    <option value="Breakout"></option>
+                    <option value="Trend Follow"></option>
+                    <option value="Mean Reversion"></option>
+                    <option value="Scalping"></option>
+                    <option value="Swing"></option>
+                    <option value="News Trading"></option>
+                  </datalist>
+                </div>
+                <div class="form-group full-width">
+                  <label for="tradeNotes">บันทึกเพิ่มเติม</label>
+                  <textarea
+                    id="tradeNotes"
+                    rows="3"
+                    placeholder="จดบันทึกเกี่ยวกับการเทรดนี้..."
+                  ></textarea>
+                </div>
+                <div class="form-group full-width">
+                  <label for="tradeScreenshot">Screenshot URL</label>
+                  <input
+                    type="url"
+                    id="tradeScreenshot"
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+
+              <!-- P&L Preview -->
+              <div class="pnl-preview" id="pnlPreview">
+                <div class="pnl-item">
+                  <span class="pnl-label">P&L (จุด)</span>
+                  <span class="pnl-value" id="previewPoints">0.00</span>
+                </div>
+                <div class="pnl-item">
+                  <span class="pnl-label">P&L (บาท)</span>
+                  <span class="pnl-value" id="previewBaht">฿0.00</span>
+                </div>
+                <div class="pnl-item">
+                  <span class="pnl-label">Net P&L</span>
+                  <span class="pnl-value highlight" id="previewNet">฿0.00</span>
+                </div>
+              </div>
+
+              <div class="form-actions">
+                <button
+                  type="reset"
+                  class="btn btn-secondary"
+                  id="resetFormBtn"
+                >
+                  <i data-lucide="rotate-ccw"></i> ล้างฟอร์ม
+                </button>
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  id="submitTradeBtn"
+                >
+                  <i data-lucide="save"></i> บันทึกการเทรด
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== TRADES (HISTORY) PAGE ==================== -->
+      <section class="page" id="page-trades">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">ประวัติการเทรด</h2>
+            <p class="page-subtitle">รายการเทรดทั้งหมด</p>
+          </div>
+          <div class="page-actions">
+            <input
+              type="text"
+              id="tradeSearch"
+              class="search-input"
+              placeholder="ค้นหา..."
+            />
+            <button class="btn btn-outline" id="exportCsvBtn">
+              <i data-lucide="download"></i> Export CSV
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="table-wrapper">
+            <table class="data-table" id="allTradesTable">
+              <thead>
+                <tr>
+                  <th data-sort="Date">
+                    วันที่ <i data-lucide="arrow-up-down"></i>
+                  </th>
+                  <th data-sort="Symbol">Symbol</th>
+                  <th data-sort="Side">Side</th>
+                  <th data-sort="Entry Price">Entry</th>
+                  <th data-sort="Exit Price">Exit</th>
+                  <th>สัญญา</th>
+                  <th data-sort="Net P&L">
+                    Net P&L <i data-lucide="arrow-up-down"></i>
+                  </th>
+                  <th>Strategy</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="allTradesBody">
+                <tr>
+                  <td colspan="9" class="empty-state">ยังไม่มีข้อมูล</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== SETTINGS PAGE ==================== -->
+      <section class="page" id="page-settings">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">ตั้งค่า</h2>
+            <p class="page-subtitle">
+              กำหนดค่าการเชื่อมต่อและ Point Multipliers
+            </p>
+          </div>
+        </div>
+
+        <div class="settings-layout">
+          <div class="card settings-card">
+            <h3 class="settings-section-title">
+              <i data-lucide="link"></i> Google Sheets Connection
+            </h3>
+            <div class="form-group">
+              <label for="apiUrl">Apps Script Web App URL</label>
+              <input
+                type="url"
+                id="apiUrl"
+                placeholder="https://script.google.com/macros/s/xxxxx/exec"
+              />
+              <small class="form-hint"
+                >วาง URL ที่ได้จากการ Deploy Google Apps Script ที่นี่</small
+              >
+            </div>
+            <button class="btn btn-primary" id="testConnectionBtn">
+              <i data-lucide="wifi"></i> ทดสอบการเชื่อมต่อ
+            </button>
+            <div id="connectionTestResult" class="test-result"></div>
+          </div>
+
+          <div class="card settings-card">
+            <h3 class="settings-section-title">
+              <i data-lucide="calculator"></i> Point Multipliers (บาท/จุด)
+            </h3>
+            <div class="multiplier-grid">
+              <div class="form-group">
+                <label for="multS50">S50</label>
+                <input type="number" id="multS50" value="200" step="any" />
+              </div>
+              <div class="form-group">
+                <label for="multGF">Gold Futures (GF)</label>
+                <input type="number" id="multGF" value="1000" step="any" />
+              </div>
+              <div class="form-group">
+                <label for="multGFM">Gold-D (GFM)</label>
+                <input type="number" id="multGFM" value="100" step="any" />
+              </div>
+              <div class="form-group">
+                <label for="multSIF">Single Stock Futures</label>
+                <input type="number" id="multSIF" value="1000" step="any" />
+              </div>
+              <div class="form-group">
+                <label for="multDW">DW</label>
+                <input type="number" id="multDW" value="1" step="any" />
+              </div>
+              <div class="form-group">
+                <label for="multOther">อื่นๆ</label>
+                <input type="number" id="multOther" value="1" step="any" />
+              </div>
+            </div>
+            <button class="btn btn-primary" id="saveSettingsBtn">
+              <i data-lucide="save"></i> บันทึกการตั้งค่า
+            </button>
+          </div>
+
+          <div class="card settings-card">
+            <h3 class="settings-section-title">
+              <i data-lucide="info"></i> วิธีตั้งค่า Google Sheets
+            </h3>
+            <div class="setup-guide">
+              <ol>
+                <li>สร้าง Google Sheet ใหม่</li>
+                <li>ไปที่ <strong>Extensions → Apps Script</strong></li>
+                <li>
+                  ลบ code เดิมแล้ววาง code จากไฟล์
+                  <code>google_apps_script.js</code>
+                </li>
+                <li>กด <strong>Deploy → New deployment</strong></li>
+                <li>เลือก Type: <strong>Web app</strong></li>
+                <li>ตั้ง Execute as: <strong>Me</strong></li>
+                <li>ตั้ง Who has access: <strong>Anyone</strong></li>
+                <li>
+                  กด <strong>Deploy</strong> แล้ว Copy URL มาวางในช่องด้านบน
+                </li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast Notification -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <p>กำลังโหลด...</p>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

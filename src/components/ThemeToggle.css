@@ -1,0 +1,53 @@
+/* Toggle button wrapper */
+.theme-toggle-btn {
+  font-size: 14px;
+  position: relative;
+  display: inline-block;
+  width: 5.5em;
+  height: auto;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Hide the real checkbox */
+.theme-toggle-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+/* Transition on all SVG parts */
+.tt-container,
+.tt-button,
+.tt-sun,
+.tt-moon,
+.tt-cloud,
+.tt-stars {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === DARK (checked) state === */
+
+/* Night sky background */
+.theme-toggle-input:checked + svg .tt-container {
+  fill: #2b4360;
+}
+
+/* Moon is already positioned on the right (cx=43) — no translation needed */
+
+/* Sun: visible by default, hide when dark */
+.tt-sun { opacity: 1; }
+.theme-toggle-input:checked + svg .tt-sun { opacity: 0; }
+
+/* Moon: hidden by default, show when dark */
+.tt-moon { opacity: 0; }
+.theme-toggle-input:checked + svg .tt-moon { opacity: 1; }
+
+/* Cloud: visible by default, hide when dark */
+.tt-cloud { opacity: 1; }
+.theme-toggle-input:checked + svg .tt-cloud { opacity: 0; }
+
+/* Stars: hidden by default, show when dark */
+.tt-stars { opacity: 0; }
+.theme-toggle-input:checked + svg .tt-stars { opacity: 1; }
