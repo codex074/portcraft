@@ -25,7 +25,7 @@ export default function Login() {
             </div>
             <div>
               <h1 className="text-3xl font-bold gradient-text pb-1">
-                TFEX Journal
+                PortCarft
               </h1>
               <p className="text-textMuted mt-2 text-sm leading-relaxed">
                 ระบบบันทึกและวิเคราะห์ผลการเทรด<br />ด้วย Google Account
