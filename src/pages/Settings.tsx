@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { useTheme } from "../contexts/ThemeContext";
 import { db } from "../lib/firebase";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import Swal from "sweetalert2";
-import { Calculator, Save, Info } from "lucide-react";
+import { Calculator, Save, Info, Database, Shield } from "lucide-react";
 
 export default function Settings() {
   const { user } = useAuth();
+  const { isDark } = useTheme();
   const [multipliers, setMultipliers] = useState({
     S50: "200",
     GF: "1000",
@@ -15,7 +17,7 @@ export default function Settings() {
     DW: "1",
     Other: "1"
   });
-  
+
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -87,50 +89,62 @@ export default function Settings() {
     }
   };
 
+  const multiplierFields = [
+    { id: "S50", label: "SET50 Futures" },
+    { id: "GF", label: "Gold Futures (GF)" },
+    { id: "GFM", label: "Gold-D (GFM)" },
+    { id: "SIF", label: "Single Stock Futures" },
+    { id: "DW", label: "DW" },
+    { id: "Other", label: "อื่นๆ" },
+  ];
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold">ตั้งค่า</h2>
-        <p className="text-textMuted text-sm mt-1">กำหนดค่า Point Multipliers</p>
+        <h2 className="text-2xl font-bold" style={{ color: isDark ? '#ffffff' : '#111827' }}>ตั้งค่า</h2>
+        <p className="text-textMuted text-sm mt-1">กำหนดค่า Point Multipliers สำหรับการคำนวณ P&L</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="card space-y-6">
-          <h3 className="font-semibold text-lg flex items-center gap-2 pb-4 border-b border-gray-200 dark:border-white/5">
-            <Calculator className="w-5 h-5 text-brand-start" />
-            Point Multipliers (บาท/จุด)
-          </h3>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="form-group mb-0">
-              <label htmlFor="S50">S50</label>
-              <input type="number" id="S50" value={multipliers.S50} onChange={handleChange} step="any" />
+        {/* Multipliers Card */}
+        <div className="card space-y-5">
+          <div className="flex items-center gap-3 pb-4" style={{ borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}` }}>
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: isDark ? 'rgba(0,212,170,0.1)' : 'rgba(0,212,170,0.08)' }}
+            >
+              <Calculator className="w-[18px] h-[18px]" style={{ color: '#00d4aa' }} />
             </div>
-            <div className="form-group mb-0">
-              <label htmlFor="GF">Gold Futures (GF)</label>
-              <input type="number" id="GF" value={multipliers.GF} onChange={handleChange} step="any" />
-            </div>
-            <div className="form-group mb-0">
-              <label htmlFor="GFM">Gold-D (GFM)</label>
-              <input type="number" id="GFM" value={multipliers.GFM} onChange={handleChange} step="any" />
-            </div>
-            <div className="form-group mb-0">
-              <label htmlFor="SIF">Single Stock Futures</label>
-              <input type="number" id="SIF" value={multipliers.SIF} onChange={handleChange} step="any" />
-            </div>
-            <div className="form-group mb-0">
-              <label htmlFor="DW">DW</label>
-              <input type="number" id="DW" value={multipliers.DW} onChange={handleChange} step="any" />
-            </div>
-            <div className="form-group mb-0">
-              <label htmlFor="Other">อื่นๆ</label>
-              <input type="number" id="Other" value={multipliers.Other} onChange={handleChange} step="any" />
+            <div>
+              <h3 className="font-semibold text-[15px]" style={{ color: isDark ? '#ffffff' : '#111827' }}>
+                Point Multipliers
+              </h3>
+              <p className="text-[11px] text-textMuted/70">บาท/จุด</p>
             </div>
           </div>
-          
-          <div className="pt-4 border-t border-gray-200 dark:border-white/5">
-            <button 
-              onClick={handleSave} 
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {multiplierFields.map(({ id, label }) => (
+              <div key={id} className="form-group mb-0">
+                <label htmlFor={id} className="!text-[12px] !font-medium !tracking-wide" style={{ color: isDark ? 'rgba(154,160,166,0.8)' : '#6b7280' }}>
+                  {label}
+                </label>
+                <input
+                  type="number"
+                  id={id}
+                  value={multipliers[id as keyof typeof multipliers]}
+                  onChange={handleChange}
+                  step="any"
+                  className="!text-sm font-mono"
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="pt-4" style={{ borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}` }}>
+            <button
+              onClick={handleSave}
               disabled={loading}
               className="btn btn-primary w-full"
             >
@@ -138,23 +152,69 @@ export default function Settings() {
             </button>
           </div>
         </div>
-        
-        <div className="card space-y-4">
-          <h3 className="font-semibold text-lg flex items-center gap-2 pb-4 border-b border-gray-200 dark:border-white/5">
-            <Info className="w-5 h-5 text-blue-400" />
-            เกี่ยวกับระบบ
-          </h3>
-          <div className="space-y-3 text-[0.95rem] text-textMuted leading-relaxed">
-            <p>
+
+        {/* About Card */}
+        <div className="card space-y-5">
+          <div className="flex items-center gap-3 pb-4" style={{ borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}` }}>
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: isDark ? 'rgba(96,165,250,0.1)' : 'rgba(59,130,246,0.08)' }}
+            >
+              <Info className="w-[18px] h-[18px]" style={{ color: '#60a5fa' }} />
+            </div>
+            <div>
+              <h3 className="font-semibold text-[15px]" style={{ color: isDark ? '#ffffff' : '#111827' }}>
+                เกี่ยวกับระบบ
+              </h3>
+              <p className="text-[11px] text-textMuted/70">TFEX Trading Journal</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-sm text-textMuted leading-relaxed">
               ระบบใหม่นี้ใช้ Firebase Authentication และ Firestore เป็นฐานข้อมูลหลักแทนการใช้ Google Apps Script แบบเดิม
             </p>
-            <ul className="list-disc pl-5 space-y-2 text-gray-700 dark:text-white/80">
-              <li>ข้อมูลการเทรดทั้งหมดถูกจัดเก็บไว้ใน Firestore ภายใต้รายชื่อผู้ใช้นี้เท่านั้น</li>
-              <li>การคำนวณ P&L สุทธิและสถิติต่างๆ จะทำบนฝั่ง Client และวิเคราะห์ผ่าน Dashboard</li>
-            </ul>
-             <p className="mt-4 p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-200 text-sm">
-               ระบบถูกตั้งค่า Firebase Project รหัส <span className="font-mono">tefex-trading</span> อัตโนมัติแล้ว ไม่จำเป็นต้องเชื่อมต่อ Web App URL เพิ่มเติม
-            </p>
+
+            <div className="space-y-2">
+              <div
+                className="flex items-start gap-2.5 p-3 rounded-xl text-sm"
+                style={{
+                  background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+                  border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+                }}
+              >
+                <Database className="w-4 h-4 mt-0.5 flex-shrink-0 text-textMuted/60" />
+                <span style={{ color: isDark ? 'rgba(255,255,255,0.7)' : '#4b5563' }}>
+                  ข้อมูลการเทรดทั้งหมดถูกจัดเก็บไว้ใน Firestore ภายใต้รายชื่อผู้ใช้นี้เท่านั้น
+                </span>
+              </div>
+              <div
+                className="flex items-start gap-2.5 p-3 rounded-xl text-sm"
+                style={{
+                  background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+                  border: `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`,
+                }}
+              >
+                <Shield className="w-4 h-4 mt-0.5 flex-shrink-0 text-textMuted/60" />
+                <span style={{ color: isDark ? 'rgba(255,255,255,0.7)' : '#4b5563' }}>
+                  การคำนวณ P&L สุทธิและสถิติต่างๆ จะทำบนฝั่ง Client และวิเคราะห์ผ่าน Dashboard
+                </span>
+              </div>
+            </div>
+
+            <div
+              className="flex items-start gap-2.5 p-3.5 rounded-xl text-[13px] mt-2"
+              style={{
+                background: isDark ? 'rgba(96,165,250,0.06)' : 'rgba(59,130,246,0.05)',
+                border: `1px solid ${isDark ? 'rgba(96,165,250,0.12)' : 'rgba(59,130,246,0.12)'}`,
+                color: isDark ? 'rgba(147,197,253,0.9)' : '#2563eb',
+              }}
+            >
+              <Info className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ opacity: 0.7 }} />
+              <span>
+                ระบบถูกตั้งค่า Firebase Project รหัส <span className="font-mono font-medium">tefex-trading</span> อัตโนมัติแล้ว ไม่จำเป็นต้องเชื่อมต่อ Web App URL เพิ่มเติม
+              </span>
+            </div>
           </div>
         </div>
       </div>
