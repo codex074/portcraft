@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/portcraft/pwa-icon.svg" />
+    <link rel="alternate icon" href="/portcraft/favicon.ico" />
+    <link rel="apple-touch-icon" href="/portcraft/apple-touch-icon-180x180.png" sizes="180x180" />
+    <link rel="mask-icon" href="/portcraft/pwa-icon.svg" color="#0d0d0d" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>PortCarft</title>
+    <!-- Apply theme before React renders to prevent flash -->
+    <script>
+      (function() {
+        var theme = localStorage.getItem('theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else if (!theme) {
+          // Default: dark mode
+          document.documentElement.classList.add('dark');
+          localStorage.setItem('theme', 'dark');
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/portcraft/assets/index-GzY_9rpv.js"></script>
+    <link rel="stylesheet" crossorigin href="/portcraft/assets/index-C-PkbjKy.css">
+  <link rel="manifest" href="/portcraft/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/portcraft/registerSW.js"></script></head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
