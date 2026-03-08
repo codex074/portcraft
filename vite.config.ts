@@ -9,7 +9,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'pwa-icon.svg'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png', 'pwa-icon.png'],
       manifest: {
         name: 'PortCarft',
         short_name: 'PortCarft',
