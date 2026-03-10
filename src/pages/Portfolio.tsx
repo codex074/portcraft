@@ -1,11 +1,12 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../contexts/AuthContext";
+import { useExchangeRate } from "../contexts/ExchangeRateContext";
 import { db } from "../lib/firebase";
 import { collection, query, where, getDocs, doc, deleteDoc, updateDoc } from "firebase/firestore";
 import type { TradeRecord, AssetType } from "../types";
 import {
   Wallet, PieChart as PieChartIcon, TrendingUp, Briefcase, Trash2, X,
-  RefreshCw, DollarSign, ArrowRightLeft
+  DollarSign, ArrowRightLeft, Pencil
 } from "lucide-react";
 import {
   Chart as ChartJS,
@@ -42,8 +43,6 @@ function fmt(n: number, decimals = 2): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-const EXCHANGE_RATE_API = "https://api.exchangerate-api.com/v4/latest/USD";
-
 /* ════════════════════════════════════════════════════════════════ */
 
 export default function Portfolio() {
@@ -55,29 +54,10 @@ export default function Portfolio() {
 
   const [assetFilter, setAssetFilter] = useState("all");
   const [currentPrices, setCurrentPrices] = useState<Record<string, string>>({});
+  const [sellTarget, setSellTarget] = useState<AggregatedHolding | null>(null);
+  const [activeDetail, setActiveDetail] = useState<"thb" | "usd" | "unrealized" | "realized" | null>(null);
 
-  const [usdThbRate, setUsdThbRate] = useState<number | null>(null);
-  const [rateLoading, setRateLoading] = useState(false);
-  const [rateLastUpdated, setRateLastUpdated] = useState<Date | null>(null);
-
-  const fetchExchangeRate = useCallback(async () => {
-    setRateLoading(true);
-    try {
-      const res = await fetch(EXCHANGE_RATE_API);
-      const data = await res.json();
-      const thbRate = data.rates?.THB;
-      if (thbRate) {
-        setUsdThbRate(thbRate);
-        setRateLastUpdated(new Date());
-      }
-    } catch (error) {
-      console.error("Error fetching exchange rate:", error);
-    } finally {
-      setRateLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchExchangeRate(); }, [fetchExchangeRate]);
+  const { usdThbRate } = useExchangeRate();
 
   useEffect(() => {
     fetchPortfolioData();
@@ -235,54 +215,27 @@ export default function Portfolio() {
     }
   };
 
-  const handleClosePosition = async (holding: AggregatedHolding) => {
-    const sym = holding.currency === "USD" ? "$" : "฿";
+  const handleClosePosition = (holding: AggregatedHolding) => {
+    setSellTarget(holding);
+  };
 
-    const { value: formValues } = await Swal.fire({
-      title: `ขาย / ปิดสถานะ ${holding.symbol}`,
-      html: `
-        <div style="text-align:left; margin-bottom:16px; font-size:0.85rem; color:#9aa0a6">
-          ต้นทุนเฉลี่ย: <b>${sym}${fmt(holding.avgEntry)}</b>
-          &nbsp;|&nbsp; ปริมาณรวม: <b>${fmt(holding.totalContracts, holding.totalContracts % 1 === 0 ? 0 : 4)}</b> หน่วย
-        </div>
-        <div style="display:flex; flex-direction:column; gap:12px;">
-          <input id="swal-exit" class="swal2-input" style="margin:0; width:100%; box-sizing:border-box;" type="number" step="any" placeholder="ราคาขาย (Exit) *" autofocus>
-          <input id="swal-comm" class="swal2-input" style="margin:0; width:100%; box-sizing:border-box;" type="number" step="any" placeholder="ค่าธรรมเนียม ขาออก รวม (฿)" value="0">
-        </div>
-      `,
-      showCancelButton: true,
-      confirmButtonText: "ยืนยันการขาย",
-      cancelButtonText: "ยกเลิก",
-      confirmButtonColor: "#00d4aa",
-      cancelButtonColor: "#3f3f46",
-      preConfirm: () => {
-        const exit = parseFloat((document.getElementById("swal-exit") as HTMLInputElement).value);
-        const commExit = parseFloat((document.getElementById("swal-comm") as HTMLInputElement).value) || 0;
-        if (!exit || isNaN(exit)) {
-          Swal.showValidationMessage("กรุณากรอกราคาขาย");
-          return false;
-        }
-        return { exit, commExit };
-      }
-    });
-
-    if (!formValues) return;
-
-    const { exit, commExit } = formValues;
+  const handleSellConfirm = async (exit: number, commExit: number) => {
+    if (!sellTarget) return;
     let totalNetPnl = 0;
-
     try {
-      for (const trade of holding.trades) {
-        const portion = trade.contracts / holding.totalContracts;
+      for (const trade of sellTarget.trades) {
+        const portion = trade.contracts / sellTarget.totalContracts;
         const commShare = Number((commExit * portion).toFixed(2));
         const pointDiff = exit - trade.entry;
         const pts = (trade.side === "Long" || trade.side === "Buy") ? pointDiff : -pointDiff;
         const exchangeRate = trade.exchangeRate || 1;
         const pnlBaht = pts * trade.contracts * exchangeRate;
-        const commEntry = trade.commissionEntry ?? trade.commission ?? 0;
-        const netPnl = pnlBaht - commEntry - commShare;
+        const commEntryNative = trade.commissionEntry ?? trade.commission ?? 0;
+        const isUSD = (trade.currency || getDefaultCurrency(trade.assetType)) === "USD";
+        const commEntryTHB = isUSD ? commEntryNative * exchangeRate : commEntryNative;
+        const commShareTHB = isUSD ? commShare * exchangeRate : commShare;
+        const netPnl = pnlBaht - commEntryTHB - commShareTHB;
         totalNetPnl += netPnl;
-
         await updateDoc(doc(db, "trades", trade.id!), {
           exit,
           commissionExit: commShare,
@@ -292,7 +245,7 @@ export default function Portfolio() {
           netPnl: Number(netPnl.toFixed(2))
         });
       }
-
+      setSellTarget(null);
       Swal.fire({
         icon: totalNetPnl >= 0 ? "success" : "info",
         title: "ขายสำเร็จ",
@@ -300,11 +253,127 @@ export default function Portfolio() {
         timer: 2000,
         showConfirmButton: false
       });
-
       await fetchPortfolioData();
     } catch (error) {
       console.error("Error closing position:", error);
       Swal.fire("ข้อผิดพลาด", "ไม่สามารถบันทึกการขายได้", "error");
+    }
+  };
+
+  const handleEditTrade = async (trade: TradeRecord) => {
+    const commEntry = trade.commissionEntry ?? trade.commission ?? 0;
+    const commExit = trade.commissionExit ?? 0;
+    const cur = trade.currency || getDefaultCurrency(trade.assetType);
+    const curSym = cur === "USD" ? "$" : "฿";
+    const isUSD = cur === "USD";
+
+    const { value } = await Swal.fire({
+      title: `แก้ไข ${trade.symbol}`,
+      width: 560,
+      html: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;text-align:left;">
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">วันที่</div>
+            <input id="pe-date" type="date" value="${trade.date}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Side</div>
+            <select id="pe-side" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+              <option value="Buy" ${trade.side === 'Buy' ? 'selected' : ''}>Buy</option>
+              <option value="Sell" ${trade.side === 'Sell' ? 'selected' : ''}>Sell</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ราคาเข้า (${curSym})</div>
+            <input id="pe-entry" type="number" step="any" value="${trade.entry}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">จำนวน</div>
+            <input id="pe-contracts" type="number" step="any" value="${trade.contracts}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ราคาออก (Exit) – ว่าง = ถือ</div>
+            <input id="pe-exit" type="number" step="any" value="${trade.exit ?? ''}" placeholder="ว่าง = Open" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">FX Rate (฿/${cur})</div>
+            <input id="pe-rate" type="number" step="any" value="${trade.exchangeRate || 1}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;" ${!isUSD ? 'readonly style="margin:0;width:100%;box-sizing:border-box;opacity:0.4;"' : ''}>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ค่าคอม ขาเข้า (${cur})</div>
+            <input id="pe-comm-entry" type="number" step="any" value="${commEntry}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ค่าคอม ขาออก (${cur})</div>
+            <input id="pe-comm-exit" type="number" step="any" value="${commExit}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div style="grid-column:span 2;">
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">กลยุทธ์</div>
+            <input id="pe-strategy" type="text" value="${trade.strategy || ''}" placeholder="DCA, Breakout..." class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div style="grid-column:span 2;">
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">บันทึก</div>
+            <textarea id="pe-notes" class="swal2-textarea" style="margin:0;width:100%;box-sizing:border-box;height:55px;resize:vertical;">${trade.notes || ''}</textarea>
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'บันทึกการแก้ไข',
+      cancelButtonText: 'ยกเลิก',
+      confirmButtonColor: '#00d4aa',
+      cancelButtonColor: '#3f3f46',
+      preConfirm: () => {
+        const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+        const entry = parseFloat(g('pe-entry'));
+        const contracts = parseFloat(g('pe-contracts'));
+        const side = g('pe-side') as 'Buy' | 'Sell';
+        const exitStr = g('pe-exit');
+        const er = parseFloat(g('pe-rate')) || 1;
+        const ceEntry = parseFloat(g('pe-comm-entry')) || 0;
+        const ceExit = parseFloat(g('pe-comm-exit')) || 0;
+
+        if (!entry || !contracts) {
+          Swal.showValidationMessage('กรุณากรอกราคาเข้าและจำนวน');
+          return false;
+        }
+
+        const hasExit = exitStr !== '' && !isNaN(parseFloat(exitStr));
+        const exit = hasExit ? parseFloat(exitStr) : undefined;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateData: Record<string, any> = {
+          date: g('pe-date'), side, entry, contracts,
+          exchangeRate: er,
+          commissionEntry: ceEntry,
+          commissionExit: ceExit,
+          strategy: g('pe-strategy') || undefined,
+          notes: g('pe-notes') || undefined,
+          status: hasExit ? 'closed' : 'open',
+        };
+
+        if (hasExit && exit !== undefined) {
+          const diff = exit - entry;
+          const pts = side === 'Buy' ? diff : -diff;
+          const pnlBaht = pts * contracts * er;
+          const commEntryTHB = isUSD ? ceEntry * er : ceEntry;
+          const commExitTHB = isUSD ? ceExit * er : ceExit;
+          const netPnl = pnlBaht - commEntryTHB - commExitTHB;
+          updateData.exit = exit;
+          updateData.points = Number(pts.toFixed(4));
+          updateData.pnlBaht = Number(pnlBaht.toFixed(2));
+          updateData.netPnl = Number(netPnl.toFixed(2));
+        }
+        return updateData;
+      }
+    });
+
+    if (!value) return;
+    try {
+      await updateDoc(doc(db, 'trades', trade.id!), value);
+      Swal.fire({ icon: 'success', title: 'แก้ไขสำเร็จ', showConfirmButton: false, timer: 1500 });
+      await fetchPortfolioData();
+    } catch (error) {
+      console.error('Error updating trade:', error);
+      Swal.fire('ข้อผิดพลาด', 'ไม่สามารถแก้ไขข้อมูลได้', 'error');
     }
   };
 
@@ -396,35 +465,12 @@ export default function Portfolio() {
         </select>
       </div>
 
-      {/* ── Exchange Rate ── */}
-      <div className="card !p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 !border-purple-500/10">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(139,92,246,0.1)' }}>
-            <ArrowRightLeft className="w-[18px] h-[18px] text-purple-400" />
-          </div>
-          <div>
-            <div className="text-[11px] text-textMuted/60 font-medium uppercase tracking-wider">USD/THB</div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-xl font-bold font-mono text-purple-400">{rate > 0 ? fmt(rate, 4) : "—"}</span>
-              <span className="text-xs text-textMuted/40">฿/$</span>
-            </div>
-            {rateLastUpdated && (
-              <div className="text-[10px] text-textMuted/30 mt-0.5">{rateLastUpdated.toLocaleTimeString('th-TH')}</div>
-            )}
-          </div>
-        </div>
-        <button onClick={fetchExchangeRate} disabled={rateLoading} className="btn btn-secondary !py-1.5 !px-3 text-xs">
-          <RefreshCw className={clsx("w-3.5 h-3.5", rateLoading && "animate-spin")} />
-          {rateLoading ? "โหลด..." : "รีเฟรช"}
-        </button>
-      </div>
-
       {/* ── Stats ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard title="มูลค่ารวม (THB)" value={`฿${fmt(stats.totalPortfolioTHB)}`} subtitle={stats.totalCurrentTHB > 0 ? `สินทรัพย์ THB: ฿${fmt(stats.totalCurrentTHB)}` : undefined} icon={Wallet} iconColor="#60a5fa" iconBg="rgba(96,165,250,0.1)" />
-        <StatCard title="มูลค่ารวม (USD)" value={`$${fmt(stats.totalPortfolioUSD)}`} subtitle={stats.totalCurrentUSD > 0 ? `สินทรัพย์ USD: $${fmt(stats.totalCurrentUSD)}` : undefined} icon={DollarSign} iconColor="#a78bfa" iconBg="rgba(167,139,250,0.1)" />
-        <StatCard title="Unrealized P&L" value={`฿${stats.unrealizedCombinedTHB >= 0 ? '+' : ''}${fmt(stats.unrealizedCombinedTHB)}`} subtitle={stats.unrealizedUSD !== 0 ? `USD: $${stats.unrealizedUSD >= 0 ? '+' : ''}${fmt(stats.unrealizedUSD)}` : undefined} icon={TrendingUp} iconColor={stats.unrealizedCombinedTHB >= 0 ? "#34d399" : "#fb7185"} iconBg={stats.unrealizedCombinedTHB >= 0 ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)"} />
-        <StatCard title="Realized P&L" value={`฿${stats.totalRealized >= 0 ? '+' : ''}${fmt(stats.totalRealized)}`} subtitle={`TFEX: ฿${tfexRealized >= 0 ? '+' : ''}${fmt(tfexRealized)}`} icon={Briefcase} iconColor={stats.totalRealized >= 0 ? "#34d399" : "#fb7185"} iconBg={stats.totalRealized >= 0 ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)"} />
+        <StatCard title="มูลค่ารวม (THB)" value={`฿${fmt(stats.totalPortfolioTHB)}`} subtitle={stats.totalCurrentTHB > 0 ? `สินทรัพย์ THB: ฿${fmt(stats.totalCurrentTHB)}` : undefined} icon={Wallet} iconColor="#60a5fa" iconBg="rgba(96,165,250,0.1)" onClick={() => setActiveDetail("thb")} />
+        <StatCard title="มูลค่ารวม (USD)" value={`$${fmt(stats.totalPortfolioUSD)}`} subtitle={stats.totalCurrentUSD > 0 ? `สินทรัพย์ USD: $${fmt(stats.totalCurrentUSD)}` : undefined} icon={DollarSign} iconColor="#a78bfa" iconBg="rgba(167,139,250,0.1)" onClick={() => setActiveDetail("usd")} />
+        <StatCard title="Unrealized P&L" value={`฿${stats.unrealizedCombinedTHB >= 0 ? '+' : ''}${fmt(stats.unrealizedCombinedTHB)}`} subtitle={stats.unrealizedUSD !== 0 ? `USD: $${stats.unrealizedUSD >= 0 ? '+' : ''}${fmt(stats.unrealizedUSD)}` : undefined} icon={TrendingUp} iconColor={stats.unrealizedCombinedTHB >= 0 ? "#34d399" : "#fb7185"} iconBg={stats.unrealizedCombinedTHB >= 0 ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)"} onClick={() => setActiveDetail("unrealized")} />
+        <StatCard title="Realized P&L" value={`฿${stats.totalRealized >= 0 ? '+' : ''}${fmt(stats.totalRealized)}`} subtitle={`TFEX: ฿${tfexRealized >= 0 ? '+' : ''}${fmt(tfexRealized)}`} icon={Briefcase} iconColor={stats.totalRealized >= 0 ? "#34d399" : "#fb7185"} iconBg={stats.totalRealized >= 0 ? "rgba(52,211,153,0.1)" : "rgba(251,113,133,0.1)"} onClick={() => setActiveDetail("realized")} />
       </div>
 
       {/* ── Holdings + Chart ── */}
@@ -433,11 +479,11 @@ export default function Portfolio() {
           <h3 className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-brand-start" />
             Holdings
-            {holdings.length > 0 && <span className="text-[11px] text-textMuted/50 font-normal">({holdings.length} สินทรัพย์)</span>}
+            {holdings.length > 0 && <span className="text-[11px] text-textMuted/60 font-normal">({holdings.length} สินทรัพย์)</span>}
           </h3>
 
           {holdings.length === 0 ? (
-            <div className="text-center py-16 text-textMuted/40 text-sm">ไม่มีสินทรัพย์ที่ถือครอง</div>
+            <div className="text-center py-16 text-textMuted/60 text-sm">ไม่มีสินทรัพย์ที่ถือครอง</div>
           ) : (
             <div className="space-y-2.5">
               {['TH_STOCK', 'US_STOCK', 'FUND', 'CRYPTO'].map(assetType => {
@@ -470,13 +516,13 @@ export default function Portfolio() {
             {allocLabels.length > 0 ? (
               <Doughnut data={allocChartData} options={doughnutOpts} />
             ) : (
-              <div className="text-textMuted/30 text-sm">ไม่มีข้อมูล</div>
+              <div className="text-textMuted/50 text-sm">ไม่มีข้อมูล</div>
             )}
           </div>
 
           {(stats.totalCurrentTHB > 0 || stats.totalCurrentUSD > 0) && (
             <div className="space-y-2 pt-3 border-t border-white/[0.04]">
-              <div className="text-[10px] font-semibold text-textMuted/40 uppercase tracking-widest px-1">แยกตามสกุลเงิน</div>
+              <div className="text-[10px] font-semibold text-textMuted/60 uppercase tracking-widest px-1">แยกตามสกุลเงิน</div>
               {stats.totalCurrentTHB > 0 && (
                 <div className="flex justify-between text-xs px-1">
                   <span className="text-blue-400">THB</span>
@@ -490,7 +536,7 @@ export default function Portfolio() {
                 </div>
               )}
               {stats.totalCurrentUSD > 0 && rate > 0 && (
-                <div className="flex justify-between text-[11px] text-textMuted/30 px-1">
+                <div className="flex justify-between text-[11px] text-textMuted/50 px-1">
                   <span>USD → THB</span>
                   <span className="font-mono">≈ ฿{fmt(stats.totalCurrentUSD * rate)}</span>
                 </div>
@@ -523,13 +569,13 @@ export default function Portfolio() {
             </thead>
             <tbody>
               {trades.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-16 text-textMuted/40 text-sm">ยังไม่มีข้อมูล</td></tr>
+                <tr><td colSpan={10} className="text-center py-16 text-textMuted/60 text-sm">ยังไม่มีข้อมูล</td></tr>
               ) : (
                 trades.map((trade) => {
                   const cur = trade.currency || getDefaultCurrency(trade.assetType);
                   return (
                     <tr key={trade.id}>
-                      <td className="font-mono text-xs text-textMuted/60 whitespace-nowrap">{trade.date}</td>
+                      <td className="font-mono text-xs text-textMuted/80 whitespace-nowrap">{trade.date}</td>
                       <td>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border whitespace-nowrap ${badgeColor(trade.assetType!)}`}>
                           {badgeLabel(trade.assetType!)}
@@ -548,7 +594,7 @@ export default function Portfolio() {
                           <span className="text-[10px] font-semibold bg-amber-500/10 text-amber-400 px-1.5 py-0.5 rounded">OPEN</span>
                         ) : (trade.exit ?? "—")}
                       </td>
-                      <td className="text-right text-textMuted/60 text-xs">{trade.contracts}</td>
+                      <td className="text-right text-textMuted/70 text-xs">{trade.contracts}</td>
                       <td className="text-right">
                         <span className={clsx("text-[10px] font-mono px-1 py-0.5 rounded", cur === "USD" ? "bg-purple-500/8 text-purple-400" : "bg-blue-500/8 text-blue-400")}>{cur}</span>
                       </td>
@@ -559,9 +605,14 @@ export default function Portfolio() {
                         {trade.status === "open" ? "—" : `${(trade.netPnl ?? 0) > 0 ? '+' : ''}${(trade.netPnl ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
                       </td>
                       <td className="text-right">
-                        <button onClick={() => handleDelete(trade.id!)} className="p-1.5 text-textMuted/30 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors" title="ลบ">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button onClick={() => handleEditTrade(trade)} className="p-1.5 text-textMuted/40 hover:text-brand-start hover:bg-brand-start/10 rounded-lg transition-colors" title="แก้ไข">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => handleDelete(trade.id!)} className="p-1.5 text-textMuted/40 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors" title="ลบ">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -571,6 +622,30 @@ export default function Portfolio() {
           </table>
         </div>
       </div>
+
+      {/* Sell Modal */}
+      {sellTarget && (
+        <SellModal
+          holding={sellTarget}
+          rate={rate}
+          initialPrice={currentPrices[sellTarget.key] || ""}
+          onConfirm={handleSellConfirm}
+          onClose={() => setSellTarget(null)}
+        />
+      )}
+
+      {/* Detail Modal */}
+      {activeDetail && (
+        <DetailModal
+          type={activeDetail}
+          holdings={holdings}
+          currentPrices={currentPrices}
+          rate={rate}
+          trades={trades}
+          tfexRealized={tfexRealized}
+          onClose={() => setActiveDetail(null)}
+        />
+      )}
     </div>
   );
 }
@@ -624,20 +699,20 @@ function AssetCategoryCard({
           <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${badgeColor(assetType)}`}>
             {badgeLabel(assetType)}
           </span>
-          <span className="text-xs text-textMuted/50">{holdings.length} รายการ</span>
+          <span className="text-xs text-textMuted/70">{holdings.length} รายการ</span>
         </div>
 
         <div className="text-right flex items-center gap-4">
           <div className="hidden sm:block">
-            <div className="text-[10px] text-textMuted/40">Value</div>
+            <div className="text-[10px] text-textMuted/60">Value</div>
             <div className="font-mono font-bold text-xs">฿{fmt(totalValueTHB)}</div>
           </div>
           <div className="min-w-[80px]">
-            <div className="text-[10px] text-textMuted/40">P&L</div>
+            <div className="text-[10px] text-textMuted/60">P&L</div>
             <div className={clsx("font-mono font-bold text-xs", unrealizedTHB > 0 ? "text-emerald-400" : unrealizedTHB < 0 ? "text-rose-400" : "text-textMuted/40")}>
               {unrealizedTHB >= 0 ? "+" : "-"}฿{fmt(Math.abs(unrealizedTHB))}
             </div>
-            <div className={clsx("text-[10px] font-mono", unrealizedPct > 0 ? "text-emerald-400/60" : unrealizedPct < 0 ? "text-rose-400/60" : "text-textMuted/30")}>
+            <div className={clsx("text-[10px] font-mono", unrealizedPct > 0 ? "text-emerald-400/80" : unrealizedPct < 0 ? "text-rose-400/80" : "text-textMuted/50")}>
               ({unrealizedPct >= 0 ? "+" : ""}{unrealizedPct.toFixed(2)}%)
             </div>
           </div>
@@ -667,10 +742,10 @@ function HoldingCard({
   badgeLabel: (a: string) => string;
   onSell: (holding: AggregatedHolding) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const cp = parseFloat(currentPrices[h.key] || "");
   const hasPrice = !isNaN(cp) && cp > 0;
   const curPrice = hasPrice ? cp : null;
+  const sym = h.currency === "USD" ? "$" : "฿";
 
   let unrealizedPnl: number | null = null;
   let unrealizedPct: number | null = null;
@@ -683,145 +758,581 @@ function HoldingCard({
     currentValue = curPrice * h.totalContracts;
   }
 
-  const sym = h.currency === "USD" ? "$" : "฿";
+  const pnlPositive = unrealizedPnl !== null && unrealizedPnl > 0;
+  const pnlNegative = unrealizedPnl !== null && unrealizedPnl < 0;
 
   return (
-    <div
-      className={clsx(
-        "rounded-xl border border-gray-200 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] p-3.5 transition-all duration-200",
-        !isExpanded && "cursor-pointer hover:border-brand-start/30 hover:shadow-glow-sm",
-        isExpanded && "space-y-3"
-      )}
-      onClick={() => !isExpanded && setIsExpanded(true)}
-    >
-      <div className={clsx("flex items-center gap-2 flex-wrap relative", isExpanded && "pb-2 border-b border-white/[0.04]")}>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${badgeColor(h.assetType)}`}>
-          {badgeLabel(h.assetType)}
+    <div className={clsx(
+      "rounded-xl border bg-white dark:bg-white/[0.02] overflow-hidden transition-all duration-200",
+      pnlPositive ? "border-emerald-500/20 dark:border-emerald-500/15"
+        : pnlNegative ? "border-rose-500/20 dark:border-rose-500/15"
+        : "border-gray-200 dark:border-white/[0.07]"
+    )}>
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-white/[0.05]">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border flex-shrink-0 ${badgeColor(h.assetType)}`}>
+            {badgeLabel(h.assetType)}
+          </span>
+          <span className="font-bold text-sm truncate">{h.symbol}</span>
+          {h.trades.length > 1 && (
+            <span className="text-[9px] text-textMuted/30 bg-white/[0.04] px-1.5 py-0.5 rounded-full flex-shrink-0">
+              {h.trades.length} lots
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] font-mono text-textMuted/60 bg-black/10 dark:bg-white/[0.04] border border-white/[0.06] px-1.5 py-0.5 rounded ml-2 flex-shrink-0">
+          {h.currency}
         </span>
-        <span className="font-bold">{h.symbol}</span>
+      </div>
 
-        {!isExpanded && (
-          <div className="ml-auto text-right">
-            <div className="text-sm font-bold font-mono">
-              {sym}{fmt(currentValue !== null ? currentValue : h.totalInvestedOriginal)}
-            </div>
-            {unrealizedPnl !== null ? (
-              <div className={clsx("text-[10px] font-mono", unrealizedPnl > 0 ? "text-emerald-400" : unrealizedPnl < 0 ? "text-rose-400" : "text-textMuted/40")}>
-                {unrealizedPnl >= 0 ? "+" : "-"}{sym}{fmt(Math.abs(unrealizedPnl))} ({unrealizedPct! >= 0 ? "+" : ""}{unrealizedPct!.toFixed(2)}%)
-              </div>
-            ) : (
-              <div className="text-[10px] font-mono text-textMuted/40">{h.totalContracts} @ {sym}{fmt(h.avgEntry)}</div>
-            )}
+      {/* ── Info row ── */}
+      <div className="grid grid-cols-2 gap-px bg-gray-100 dark:bg-white/[0.03]">
+        <div className="bg-white dark:bg-[#151515] px-4 py-2.5">
+          <div className="text-[10px] text-textMuted/60 uppercase tracking-wider">ต้นทุนเฉลี่ย</div>
+          <div className="font-mono font-semibold text-sm mt-0.5">{sym}{fmt(h.avgEntry)}</div>
+        </div>
+        <div className="bg-white dark:bg-[#151515] px-4 py-2.5">
+          <div className="text-[10px] text-textMuted/60 uppercase tracking-wider">ปริมาณ</div>
+          <div className="font-mono font-semibold text-sm mt-0.5">
+            {fmt(h.totalContracts, h.totalContracts % 1 === 0 ? 0 : 4)}
+            <span className="text-textMuted/50 text-[10px] ml-1">หน่วย</span>
           </div>
-        )}
+        </div>
+      </div>
 
-        {isExpanded && (
-          <>
-            <span className="ml-auto mr-6 text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.04] text-textMuted/40">{h.currency}</span>
+      {/* ── Price input ── */}
+      <div className="px-4 pt-3 pb-2">
+        <div className="text-[10px] text-textMuted/60 uppercase tracking-wider mb-1.5">ราคาปัจจุบัน</div>
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-textMuted/50 font-mono pointer-events-none">{sym}</span>
+          <input
+            type="number"
+            step="any"
+            placeholder="กรอกราคาปัจจุบัน..."
+            className="w-full !py-2 !pl-6 !pr-8 text-sm font-mono !bg-gray-50 dark:!bg-white/[0.03] !border-gray-200 dark:!border-white/[0.06] rounded-lg"
+            value={currentPrices[h.key] || ""}
+            onChange={e => setCurrentPrices(prev => ({ ...prev, [h.key]: e.target.value }))}
+          />
+          {currentPrices[h.key] && (
             <button
-              className="absolute right-0 top-1/2 -translate-y-1/2 p-1 text-textMuted/30 hover:text-white bg-white/[0.06] rounded-full transition-colors"
-              onClick={(e) => { e.stopPropagation(); setIsExpanded(false); }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-textMuted/30 hover:text-white rounded-full transition-colors"
+              onClick={() => setCurrentPrices(prev => { const n = { ...prev }; delete n[h.key]; return n; })}
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-3 h-3" />
             </button>
-          </>
+          )}
+        </div>
+      </div>
+
+      {/* ── P&L / Value display ── */}
+      <div className="px-4 pb-3">
+        {unrealizedPnl !== null ? (
+          <div className={clsx(
+            "rounded-lg px-3 py-2.5 flex items-center justify-between",
+            pnlPositive ? "bg-emerald-500/8 border border-emerald-500/15"
+              : pnlNegative ? "bg-rose-500/8 border border-rose-500/15"
+              : "bg-white/[0.03] border border-white/[0.05]"
+          )}>
+            <div>
+              <div className="text-[10px] text-textMuted/60 uppercase tracking-wider">Unrealized P&L</div>
+              <div className={clsx(
+                "font-mono font-bold text-base leading-tight mt-0.5",
+                pnlPositive ? "text-emerald-400" : pnlNegative ? "text-rose-400" : "text-textMuted"
+              )}>
+                {unrealizedPnl >= 0 ? "+" : "-"}{sym}{fmt(Math.abs(unrealizedPnl))}
+              </div>
+              <div className={clsx(
+                "text-[11px] font-mono",
+                pnlPositive ? "text-emerald-400/80" : pnlNegative ? "text-rose-400/80" : "text-textMuted/50"
+              )}>
+                {unrealizedPct! >= 0 ? "+" : ""}{unrealizedPct!.toFixed(2)}%
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-textMuted/60 uppercase tracking-wider">มูลค่า</div>
+              <div className="font-mono font-semibold text-sm mt-0.5">{sym}{fmt(currentValue!)}</div>
+              {h.currency === "USD" && rate > 0 && (
+                <div className="text-[10px] font-mono text-purple-400/70 mt-0.5">≈ ฿{fmt(currentValue! * rate)}</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg px-3 py-2.5 bg-gray-50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/[0.04] flex items-center justify-between">
+            <div className="text-[10px] text-textMuted/60 uppercase tracking-wider">มูลค่าต้นทุน</div>
+            <div className="flex items-center gap-2">
+              <div className="font-mono text-sm text-textMuted/80">{sym}{fmt(h.totalInvestedOriginal)}</div>
+              {h.currency === "USD" && rate > 0 && (
+                <div className="text-[10px] font-mono text-purple-400/60">≈ ฿{fmt(h.totalInvestedOriginal * rate)}</div>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
-      {isExpanded && (
-        <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-            <div>
-              <span className="text-textMuted/40 text-[11px]">ต้นทุนเฉลี่ย</span>
-              <div className="font-mono font-semibold text-sm">{sym}{fmt(h.avgEntry)}</div>
-            </div>
-            <div>
-              <span className="text-textMuted/40 text-[11px]">จำนวน</span>
-              <div className="font-mono font-semibold text-sm">{fmt(h.totalContracts, h.totalContracts % 1 === 0 ? 0 : 4)}</div>
-            </div>
-            <div>
-              <span className="text-textMuted/40 text-[11px]">มูลค่าต้นทุน</span>
-              <div className="font-mono text-xs">{sym}{fmt(h.totalInvestedOriginal)}</div>
-            </div>
-            {currentValue !== null && (
-              <div>
-                <span className="text-textMuted/40 text-[11px]">มูลค่าปัจจุบัน</span>
-                <div className="font-mono text-xs">{sym}{fmt(currentValue)}</div>
-              </div>
-            )}
-          </div>
-
-          {h.trades.length > 1 && (
-            <div className="text-[10px] text-textMuted/30 bg-white/[0.02] px-2 py-1 rounded">
-              รวมจาก {h.trades.length} รายการ (เฉลี่ยต้นทุนแล้ว)
-            </div>
-          )}
-
-          <div className="flex items-center gap-2 pt-1">
-            <div className="relative flex-1">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] text-textMuted/30 font-mono">{sym}</span>
-              <input
-                type="number"
-                step="any"
-                placeholder="ราคาปัจจุบัน..."
-                className="w-full !py-1.5 !pl-6 text-xs rounded-lg !pr-7 !bg-white/[0.03] font-mono"
-                value={currentPrices[h.key] || ""}
-                onChange={e => setCurrentPrices(prev => ({ ...prev, [h.key]: e.target.value }))}
-              />
-              {currentPrices[h.key] && (
-                <button
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-textMuted/30 hover:text-white rounded-full"
-                  onClick={(e) => { e.stopPropagation(); setCurrentPrices(prev => { const n = { ...prev }; delete n[h.key]; return n; })}}
-                ><X className="w-3 h-3" /></button>
-              )}
-            </div>
-            <div className="text-right min-w-[80px]">
-              {unrealizedPnl !== null ? (
-                <div>
-                  <div className={clsx("text-sm font-mono font-bold", unrealizedPnl > 0 ? "text-emerald-400" : unrealizedPnl < 0 ? "text-rose-400" : "text-textMuted/40")}>
-                    {unrealizedPnl >= 0 ? "+" : "-"}{sym}{fmt(Math.abs(unrealizedPnl))}
-                  </div>
-                  <div className={clsx("text-[10px] font-mono", unrealizedPct! > 0 ? "text-emerald-400/60" : unrealizedPct! < 0 ? "text-rose-400/60" : "text-textMuted/30")}>
-                    ({unrealizedPct! >= 0 ? "+" : ""}{unrealizedPct!.toFixed(2)}%)
-                  </div>
-                </div>
-              ) : (
-                <span className="text-textMuted/30 font-mono text-sm">—</span>
-              )}
-            </div>
-          </div>
-
-          <div className="pt-2 border-t border-white/[0.04]">
-            <button onClick={() => onSell(h)} className="w-full btn btn-outline !py-2 text-xs">
-              ขาย / ปิดสถานะ
-            </button>
-          </div>
-
-          {h.currency === "USD" && rate > 0 && (
-            <div className="text-[10px] text-purple-400/60 bg-purple-500/[0.04] border border-purple-500/10 px-2 py-1.5 rounded flex items-center justify-between">
-              <span>≈ เป็นบาท</span>
-              <span className="font-mono font-semibold">฿{fmt((currentValue ?? h.totalInvestedOriginal) * rate)}</span>
-            </div>
-          )}
-        </div>
-      )}
+      {/* ── Sell button ── */}
+      <div className="px-4 pb-4">
+        <button
+          onClick={() => onSell(h)}
+          className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] text-xs font-semibold text-textMuted/70 hover:text-brand-start hover:border-brand-start/30 hover:bg-brand-start/5 transition-all duration-150"
+        >
+          <ArrowRightLeft className="w-3.5 h-3.5" />
+          ขาย / ปิดสถานะ
+        </button>
+      </div>
     </div>
   );
 }
 
-function StatCard({ title, value, subtitle, icon: Icon, iconColor, iconBg }: {
-  title: string; value: string; subtitle?: string; icon: React.ElementType; iconColor: string; iconBg: string;
+function StatCard({ title, value, subtitle, icon: Icon, iconColor, iconBg, onClick }: {
+  title: string; value: string; subtitle?: string; icon: React.ElementType; iconColor: string; iconBg: string; onClick?: () => void;
 }) {
   return (
-    <div className="card !p-4 group hover:!border-white/[0.12] transition-all duration-200">
+    <div
+      className={clsx("card !p-4 group hover:!border-white/[0.12] transition-all duration-200", onClick && "cursor-pointer hover:scale-[1.02] active:scale-[0.98]")}
+      onClick={onClick}
+    >
       <div className="flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: iconBg }}>
           <Icon className="w-[18px] h-[18px]" style={{ color: iconColor }} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium text-textMuted/70 uppercase tracking-wider truncate">{title}</div>
+          <div className="text-[11px] font-medium text-textMuted/80 uppercase tracking-wider truncate">{title}</div>
           <div className="text-lg font-bold font-mono tracking-tight mt-0.5 truncate">{value}</div>
-          {subtitle && <div className="text-[10px] text-textMuted/40 font-mono mt-0.5 truncate">{subtitle}</div>}
+          {subtitle && <div className="text-[10px] text-textMuted/60 font-mono mt-0.5 truncate">{subtitle}</div>}
+        </div>
+        {onClick && (
+          <div className="flex-shrink-0 text-textMuted/30 group-hover:text-textMuted/60 transition-colors mt-0.5">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── DetailModal ── */
+function DetailModal({ type, holdings, currentPrices, rate, trades, tfexRealized, onClose }: {
+  type: "thb" | "usd" | "unrealized" | "realized";
+  holdings: AggregatedHolding[];
+  currentPrices: Record<string, string>;
+  rate: number;
+  trades: TradeRecord[];
+  tfexRealized: number;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const titles: Record<string, string> = {
+    thb: "มูลค่ารวม (THB)",
+    usd: "มูลค่ารวม (USD)",
+    unrealized: "Unrealized P&L — รายละเอียด",
+    realized: "Realized P&L — รายละเอียด",
+  };
+
+  const thbHoldings = holdings.filter(h => h.currency === "THB");
+  const usdHoldings = holdings.filter(h => h.currency === "USD");
+
+  const holdingsWithPnl = holdings.map(h => {
+    const cp = parseFloat(currentPrices[h.key] || "");
+    const hasPrice = !isNaN(cp) && cp > 0;
+    const curPrice = hasPrice ? cp : h.avgEntry;
+    const diff = curPrice - h.avgEntry;
+    const pnl = diff * h.totalContracts;
+    const pnlTHB = h.currency === "USD" ? pnl * rate : pnl;
+    const pct = (diff / h.avgEntry) * 100;
+    return { ...h, pnl, pnlTHB, pct, hasPrice, curPrice };
+  }).sort((a, b) => b.pnlTHB - a.pnlTHB);
+
+  const closedInvTrades = trades.filter(t => t.status !== "open");
+  const realizedBySymbol: Record<string, { symbol: string; assetType: string; pnl: number }> = {};
+  closedInvTrades.forEach(t => {
+    const key = `${t.symbol}_${t.assetType}`;
+    if (!realizedBySymbol[key]) {
+      realizedBySymbol[key] = { symbol: t.symbol, assetType: t.assetType || "", pnl: 0 };
+    }
+    realizedBySymbol[key].pnl += t.netPnl ?? 0;
+  });
+  const realizedEntries = Object.values(realizedBySymbol).sort((a, b) => b.pnl - a.pnl);
+  const investmentRealized = closedInvTrades.reduce((sum, t) => sum + (t.netPnl ?? 0), 0);
+  const grandRealized = tfexRealized + investmentRealized;
+
+  const thbTotal = thbHoldings.reduce((sum, h) => {
+    const cp = parseFloat(currentPrices[h.key] || "");
+    return sum + (!isNaN(cp) && cp > 0 ? cp : h.avgEntry) * h.totalContracts;
+  }, 0);
+  const usdTotal = usdHoldings.reduce((sum, h) => {
+    const cp = parseFloat(currentPrices[h.key] || "");
+    return sum + (!isNaN(cp) && cp > 0 ? cp : h.avgEntry) * h.totalContracts;
+  }, 0);
+  const unrealizedTotal = holdingsWithPnl.reduce((s, h) => s + h.pnlTHB, 0);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-[#151515] rounded-t-2xl sm:rounded-2xl border border-white/10 shadow-2xl w-full sm:max-w-[480px] max-h-[85vh] overflow-hidden animate-in fade-in slide-in-from-bottom-4 sm:zoom-in-95 duration-200 flex flex-col">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.06] flex-shrink-0">
+          <div className="font-bold text-base text-white">{titles[type]}</div>
+          <button onClick={onClose} className="p-2 text-white/40 hover:text-white rounded-xl hover:bg-white/[0.06] transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Scrollable content */}
+        <div className="overflow-y-auto flex-1 p-5 space-y-2.5">
+
+          {/* ── THB ── */}
+          {type === "thb" && (
+            thbHoldings.length === 0
+              ? <div className="text-center py-10 text-white/50 text-sm">ไม่มีสินทรัพย์ THB</div>
+              : <>
+                {thbHoldings.map(h => {
+                  const cp = parseFloat(currentPrices[h.key] || "");
+                  const hasPrice = !isNaN(cp) && cp > 0;
+                  const curPrice = hasPrice ? cp : h.avgEntry;
+                  const curValue = curPrice * h.totalContracts;
+                  return (
+                    <div key={h.key} className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.1] transition-colors">
+                      <div>
+                        <div className="font-semibold text-sm text-white">{h.symbol}</div>
+                        <div className="text-[11px] text-white/70 mt-0.5 font-mono">
+                          {fmt(h.totalContracts, h.totalContracts % 1 === 0 ? 0 : 4)} หน่วย × ฿{fmt(curPrice)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono font-semibold text-sm text-white">฿{fmt(curValue)}</div>
+                        {!hasPrice && <div className="text-[10px] text-amber-400/70">ต้นทุน</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex justify-between items-center pt-3 border-t border-white/[0.06]">
+                  <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">รวม</span>
+                  <span className="font-mono font-bold text-base text-white">฿{fmt(thbTotal)}</span>
+                </div>
+              </>
+          )}
+
+          {/* ── USD ── */}
+          {type === "usd" && (
+            usdHoldings.length === 0
+              ? <div className="text-center py-10 text-white/50 text-sm">ไม่มีสินทรัพย์ USD</div>
+              : <>
+                {usdHoldings.map(h => {
+                  const cp = parseFloat(currentPrices[h.key] || "");
+                  const hasPrice = !isNaN(cp) && cp > 0;
+                  const curPrice = hasPrice ? cp : h.avgEntry;
+                  const curValue = curPrice * h.totalContracts;
+                  return (
+                    <div key={h.key} className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.1] transition-colors">
+                      <div>
+                        <div className="font-semibold text-sm text-white">{h.symbol}</div>
+                        <div className="text-[11px] text-white/70 mt-0.5 font-mono">
+                          {fmt(h.totalContracts, h.totalContracts % 1 === 0 ? 0 : 4)} หน่วย × ${fmt(curPrice)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono font-semibold text-sm text-white">${fmt(curValue)}</div>
+                        {rate > 0 && <div className="text-[10px] font-mono text-purple-400/70">≈ ฿{fmt(curValue * rate)}</div>}
+                        {!hasPrice && <div className="text-[10px] text-amber-400/70">ต้นทุน</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex justify-between items-center pt-3 border-t border-white/[0.06]">
+                  <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">รวม</span>
+                  <div className="text-right">
+                    <div className="font-mono font-bold text-base text-white">${fmt(usdTotal)}</div>
+                    {rate > 0 && <div className="text-[11px] font-mono text-purple-400/70">≈ ฿{fmt(usdTotal * rate)}</div>}
+                  </div>
+                </div>
+              </>
+          )}
+
+          {/* ── Unrealized ── */}
+          {type === "unrealized" && (
+            holdingsWithPnl.length === 0
+              ? <div className="text-center py-10 text-white/50 text-sm">ไม่มีสินทรัพย์ที่ถือครอง</div>
+              : <>
+                {holdingsWithPnl.map(h => (
+                  <div key={h.key} className={clsx(
+                    "flex items-center justify-between p-3.5 rounded-xl border transition-colors",
+                    h.pnlTHB > 0 ? "bg-emerald-500/[0.04] border-emerald-500/15"
+                      : h.pnlTHB < 0 ? "bg-rose-500/[0.04] border-rose-500/15"
+                      : "bg-white/[0.03] border-white/[0.06]"
+                  )}>
+                    <div>
+                      <div className="font-semibold text-sm text-white">{h.symbol}</div>
+                      <div className="text-[11px] text-white/60 mt-0.5 font-mono">
+                        {h.currency === "USD" ? "$" : "฿"}{fmt(h.avgEntry)}
+                        {h.hasPrice && <> → {h.currency === "USD" ? "$" : "฿"}{fmt(h.curPrice)}</>}
+                        {!h.hasPrice && <span className="ml-1 text-amber-400/70">(ไม่มีราคา)</span>}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className={clsx(
+                        "font-mono font-bold text-sm",
+                        h.pnlTHB > 0 ? "text-emerald-400" : h.pnlTHB < 0 ? "text-rose-400" : "text-white/40"
+                      )}>
+                        {h.pnlTHB >= 0 ? "+" : ""}฿{fmt(h.pnlTHB)}
+                      </div>
+                      <div className={clsx(
+                        "text-[10px] font-mono",
+                        h.pct > 0 ? "text-emerald-400/80" : h.pct < 0 ? "text-rose-400/80" : "text-white/50"
+                      )}>
+                        {h.pct >= 0 ? "+" : ""}{h.pct.toFixed(2)}%
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div className="flex justify-between items-center pt-3 border-t border-white/[0.06]">
+                  <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">รวม Unrealized</span>
+                  <span className={clsx("font-mono font-bold text-base", unrealizedTotal >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                    {unrealizedTotal >= 0 ? "+" : ""}฿{fmt(unrealizedTotal)}
+                  </span>
+                </div>
+              </>
+          )}
+
+          {/* ── Realized ── */}
+          {type === "realized" && (
+            <>
+              {/* TFEX */}
+              <div className="text-[10px] font-semibold text-white/60 uppercase tracking-widest px-1">TFEX</div>
+              <div className="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+                <div>
+                  <div className="font-semibold text-sm text-white">TFEX (Futures)</div>
+                  <div className="text-[11px] text-white/60 mt-0.5">สัญญา Futures ทั้งหมด</div>
+                </div>
+                <span className={clsx("font-mono font-bold text-sm", tfexRealized >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                  {tfexRealized >= 0 ? "+" : ""}฿{fmt(tfexRealized)}
+                </span>
+              </div>
+
+              {/* Investment */}
+              {realizedEntries.length > 0 && <>
+                <div className="text-[10px] font-semibold text-white/60 uppercase tracking-widest px-1 pt-1">การลงทุน</div>
+                {realizedEntries.map(entry => (
+                  <div key={`${entry.symbol}_${entry.assetType}`} className={clsx(
+                    "flex items-center justify-between p-3.5 rounded-xl border transition-colors",
+                    entry.pnl > 0 ? "bg-emerald-500/[0.04] border-emerald-500/15"
+                      : entry.pnl < 0 ? "bg-rose-500/[0.04] border-rose-500/15"
+                      : "bg-white/[0.03] border-white/[0.06]"
+                  )}>
+                    <div>
+                      <div className="font-semibold text-sm text-white">{entry.symbol}</div>
+                      <div className="text-[11px] text-white/60 mt-0.5">{entry.assetType.replace("_", " ")}</div>
+                    </div>
+                    <span className={clsx("font-mono font-bold text-sm", entry.pnl >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                      {entry.pnl >= 0 ? "+" : ""}฿{fmt(entry.pnl)}
+                    </span>
+                  </div>
+                ))}
+              </>}
+
+              {realizedEntries.length === 0 && tfexRealized === 0 && (
+                <div className="text-center py-6 text-white/50 text-sm">ยังไม่มีกำไร/ขาดทุนที่รับรู้แล้ว</div>
+              )}
+
+              {/* Grand total */}
+              <div className="flex justify-between items-center pt-3 border-t border-white/[0.06]">
+                <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">รวม Realized</span>
+                <span className={clsx("font-mono font-bold text-base", grandRealized >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                  {grandRealized >= 0 ? "+" : ""}฿{fmt(grandRealized)}
+                </span>
+              </div>
+            </>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── SellModal ── */
+function SellModal({ holding: h, rate, initialPrice, onConfirm, onClose }: {
+  holding: AggregatedHolding;
+  rate: number;
+  initialPrice: string;
+  onConfirm: (exit: number, commission: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [exitPrice, setExitPrice] = useState(initialPrice);
+  const [commission, setCommission] = useState("0");
+  const [submitting, setSubmitting] = useState(false);
+  const sym = h.currency === "USD" ? "$" : "฿";
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  // Live P&L calculation
+  const preview = useMemo(() => {
+    const exit = parseFloat(exitPrice);
+    if (!exit || isNaN(exit)) return null;
+    const diff = exit - h.avgEntry;
+    const rawPnl = diff * h.totalContracts;
+    const comm = parseFloat(commission) || 0;
+    const pnlTHB = h.currency === "USD" ? rawPnl * rate - comm : rawPnl - comm;
+    const pct = (diff / h.avgEntry) * 100;
+    return { pnlTHB, pct };
+  }, [exitPrice, commission, h, rate]);
+
+  const handleSubmit = async () => {
+    const exit = parseFloat(exitPrice);
+    if (!exit || isNaN(exit)) return;
+    setSubmitting(true);
+    try { await onConfirm(exit, parseFloat(commission) || 0); }
+    finally { setSubmitting(false); }
+  };
+
+  const canSubmit = !submitting && !!exitPrice && !isNaN(parseFloat(exitPrice));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+
+      {/* Panel */}
+      <div className="relative bg-[#151515] rounded-t-2xl sm:rounded-2xl border border-white/10 shadow-2xl w-full sm:max-w-[440px] overflow-hidden animate-in fade-in slide-in-from-bottom-4 sm:zoom-in-95 duration-200">
+
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-white/[0.06]">
+          <div>
+            <div className="font-bold text-lg text-white">ขาย / ปิดสถานะ</div>
+            <div className="text-xs text-white/70 mt-0.5 flex items-center gap-1.5">
+              <span className="font-semibold text-white/70">{h.symbol}</span>
+              <span className="text-white/30">·</span>
+              <span>{h.assetType.replace("_", " ")}</span>
+              <span className="text-white/30">·</span>
+              <span className="font-mono text-[10px] bg-white/[0.06] px-1.5 py-0.5 rounded">{h.currency}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 text-white/40 hover:text-white rounded-xl hover:bg-white/[0.06] transition-colors mt-0.5">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Holding summary */}
+        <div className="grid grid-cols-3 border-b border-white/[0.06] bg-white/[0.015]">
+          {[
+            { label: "ต้นทุนเฉลี่ย", value: `${sym}${fmt(h.avgEntry)}` },
+            { label: "ปริมาณ", value: `${fmt(h.totalContracts, h.totalContracts % 1 === 0 ? 0 : 4)}` },
+            { label: "มูลค่าต้นทุน", value: `${sym}${fmt(h.totalInvestedOriginal)}` },
+          ].map(({ label, value }) => (
+            <div key={label} className="px-4 py-3 border-r border-white/[0.06] last:border-r-0">
+              <div className="text-[10px] text-white/60 uppercase tracking-wider">{label}</div>
+              <div className="font-mono font-semibold text-xs mt-0.5 truncate text-white">{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Form */}
+        <div className="p-5 space-y-4">
+
+          {/* Exit price */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-white/70 uppercase tracking-wider block">
+              ราคาขาย (Exit Price) <span className="text-rose-400">*</span>
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-white/60 font-mono pointer-events-none">{sym}</span>
+              <input
+                type="number"
+                step="any"
+                autoFocus
+                placeholder="0.00"
+                value={exitPrice}
+                onChange={e => setExitPrice(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && canSubmit && handleSubmit()}
+                className="w-full !pl-8 !py-3 text-xl font-mono font-semibold focus:!border-brand-start/50 transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Commission */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-white/70 uppercase tracking-wider block">
+              ค่าธรรมเนียม ขาออก รวม (฿)
+            </label>
+            <div className="relative">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-white/60 font-mono pointer-events-none">฿</span>
+              <input
+                type="number"
+                step="any"
+                placeholder="0.00"
+                value={commission}
+                onChange={e => setCommission(e.target.value)}
+                className="w-full !pl-8 !py-2.5 font-mono"
+              />
+            </div>
+          </div>
+
+          {/* Live P&L Preview */}
+          <div className={clsx(
+            "rounded-xl border transition-all duration-300 overflow-hidden",
+            preview === null
+              ? "border-white/[0.06] bg-white/[0.02]"
+              : preview.pnlTHB >= 0
+              ? "border-emerald-500/25 bg-emerald-500/[0.05]"
+              : "border-rose-500/25 bg-rose-500/[0.05]"
+          )}>
+            {preview === null ? (
+              <div className="px-4 py-4 text-center text-xs text-white/50">
+                กรอกราคาขายเพื่อดูประมาณการ P&L
+              </div>
+            ) : (
+              <div className="px-4 py-4 text-center">
+                <div className="text-[10px] text-white/60 uppercase tracking-wider mb-1.5">ประมาณการ Net P&L</div>
+                <div className={clsx(
+                  "text-3xl font-bold font-mono tracking-tight",
+                  preview.pnlTHB >= 0 ? "text-emerald-400" : "text-rose-400"
+                )}>
+                  {preview.pnlTHB >= 0 ? "+" : ""}฿{fmt(preview.pnlTHB)}
+                </div>
+                <div className={clsx(
+                  "text-sm font-mono mt-1",
+                  preview.pct >= 0 ? "text-emerald-400/80" : "text-rose-400/80"
+                )}>
+                  {preview.pct >= 0 ? "+" : ""}{preview.pct.toFixed(2)}%
+                  {h.currency === "USD" && rate > 0 && (
+                    <span className="ml-2 text-white/50 text-[10px]">@ ฿{fmt(rate, 2)}/$</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 flex gap-2.5">
+          <button onClick={onClose} className="btn btn-secondary flex-1 !py-2.5">
+            ยกเลิก
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="btn btn-primary flex-1 !py-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {submitting ? (
+              <span className="flex items-center gap-2">
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                กำลังบันทึก...
+              </span>
+            ) : "ยืนยันการขาย"}
+          </button>
         </div>
       </div>
     </div>

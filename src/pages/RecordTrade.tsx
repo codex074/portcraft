@@ -43,6 +43,9 @@ export default function RecordTrade() {
     notes: ""
   });
 
+  // Crypto total-value input mode
+  const [cryptoTotalEntry, setCryptoTotalEntry] = useState("");
+
   const [multipliers, setMultipliers] = useState<Record<string, number>>(DEFAULT_MULTIPLIERS);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [autoRate, setAutoRate] = useState<number | null>(null);
@@ -70,13 +73,21 @@ export default function RecordTrade() {
 
   /* ── Derived values ── */
   const isOpen = !formData.exit;
-  const entryPrice = parseFloat(formData.entry) || 0;
+  // For CRYPTO: use total-value computed entry price if cryptoTotalEntry is set
+  const computedEntryFromTotal = formData.assetType === "CRYPTO" && cryptoTotalEntry
+    ? (parseFloat(cryptoTotalEntry) || 0) / Math.max(parseFloat(formData.contracts) || 1, 0.000001)
+    : null;
+  const entryPrice = computedEntryFromTotal !== null ? computedEntryFromTotal : parseFloat(formData.entry) || 0;
   const exitPrice = parseFloat(formData.exit) || 0;
   const contracts = parseFloat(formData.contracts) || 1;
   const commissionEntry = parseFloat(formData.commissionEntry) || 0;
   const commissionExit = parseFloat(formData.commissionExit) || 0;
-  const totalCommission = commissionEntry + (isOpen ? 0 : commissionExit);
   const exchangeRate = parseFloat(formData.exchangeRate) || 1;
+  const isUSD = formData.currency !== "THB";
+  // Commission in THB: for USD assets multiply by exchange rate
+  const totalCommissionTHB = isUSD
+    ? (commissionEntry + (isOpen ? 0 : commissionExit)) * exchangeRate
+    : commissionEntry + (isOpen ? 0 : commissionExit);
 
   const pointDiff = exitPrice - entryPrice;
   const points = (formData.side === 'Long' || formData.side === 'Buy') ? pointDiff : -pointDiff;
@@ -91,7 +102,7 @@ export default function RecordTrade() {
     pnlBaht = points * contracts * exchangeRate;
   }
 
-  const netPnl = pnlBaht - totalCommission;
+  const netPnl = pnlBaht - totalCommissionTHB;
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -113,8 +124,12 @@ export default function RecordTrade() {
     e.preventDefault();
     if (!user) return;
 
-    if (!formData.symbol || !formData.entry) {
-      Swal.fire({ icon: "error", title: "ข้อมูลไม่ครบถ้วน", text: "กรุณากรอก Symbol และราคาเข้า" });
+    const hasEntry = formData.assetType === "CRYPTO" && cryptoTotalEntry
+      ? parseFloat(cryptoTotalEntry) > 0
+      : !!formData.entry;
+
+    if (!formData.symbol || !hasEntry) {
+      Swal.fire({ icon: "error", title: "ข้อมูลไม่ครบถ้วน", text: "กรุณากรอก Symbol และราคาเข้า (หรือมูลค่ารวม)" });
       return;
     }
 
@@ -130,9 +145,9 @@ export default function RecordTrade() {
         symbol: formData.symbol,
         series: formData.series,
         side: formData.side,
-        entry: parseFloat(formData.entry),
+        entry: entryPrice, // uses computed entry if CRYPTO total-value mode
         contracts,
-        commissionEntry,
+        commissionEntry,         // stored in native currency (USD for US_STOCK/CRYPTO with USD)
         commissionExit: isOpen ? 0 : commissionExit,
         strategy: formData.strategy,
         notes: formData.notes,
@@ -144,7 +159,7 @@ export default function RecordTrade() {
         exit: exitPrice,
         points: Number(points.toFixed(4)),
         pnlBaht: Number(pnlBaht.toFixed(2)),
-        netPnl: Number(netPnl.toFixed(2))
+        netPnl: Number(netPnl.toFixed(2))  // always in THB
       };
 
       await addDoc(collection(db, "trades"), { ...baseData, ...closedExtra });
@@ -159,6 +174,7 @@ export default function RecordTrade() {
         showConfirmButton: false
       });
 
+      setCryptoTotalEntry("");
       setFormData(prev => ({
         ...prev,
         symbol: "", series: "", entry: "", exit: "",
@@ -208,6 +224,7 @@ export default function RecordTrade() {
       }
     }
 
+    setCryptoTotalEntry("");
     setFormData(prev => ({
       ...prev,
       assetType,
@@ -216,25 +233,29 @@ export default function RecordTrade() {
       exchangeRate: nextExchangeRate,
       symbol: "",
       series: "",
+      entry: "",
     }));
   };
 
-  const resetForm = () => setFormData({
-    assetType: "TFEX",
-    date: new Date().toISOString().split('T')[0],
-    symbol: "",
-    series: "",
-    side: "Long",
-    currency: "THB",
-    exchangeRate: "1",
-    entry: "",
-    exit: "",
-    contracts: "1",
-    commissionEntry: "0",
-    commissionExit: "0",
-    strategy: "",
-    notes: ""
-  });
+  const resetForm = () => {
+    setCryptoTotalEntry("");
+    setFormData({
+      assetType: "TFEX",
+      date: new Date().toISOString().split('T')[0],
+      symbol: "",
+      series: "",
+      side: "Long",
+      currency: "THB",
+      exchangeRate: "1",
+      entry: "",
+      exit: "",
+      contracts: "1",
+      commissionEntry: "0",
+      commissionExit: "0",
+      strategy: "",
+      notes: ""
+    });
+  };
 
   const getContractsLabel = () => {
     switch (formData.assetType) {
@@ -376,8 +397,28 @@ export default function RecordTrade() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="form-group">
-                  <label htmlFor="entry">ราคาเข้า (Entry) <span className="required">*</span></label>
-                  <input type="number" id="entry" step="any" placeholder="0.00" value={formData.entry} onChange={handleChange} required />
+                  <label htmlFor="entry" className="flex items-center justify-between gap-2">
+                    <span>
+                      {formData.assetType === "CRYPTO" ? "ราคา/เหรียญ (Entry)" : "ราคาเข้า (Entry)"}
+                      {formData.assetType !== "CRYPTO" && <span className="required"> *</span>}
+                    </span>
+                    {computedEntryFromTotal !== null && computedEntryFromTotal > 0 && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-brand-start/10 text-brand-start">AUTO</span>
+                    )}
+                  </label>
+                  <input
+                    type="number" id="entry" step="any" placeholder="0.00000000"
+                    value={computedEntryFromTotal !== null && computedEntryFromTotal > 0
+                      ? computedEntryFromTotal.toFixed(8).replace(/\.?0+$/, '')
+                      : formData.entry}
+                    onChange={e => {
+                      if (formData.assetType === "CRYPTO") setCryptoTotalEntry("");
+                      handleChange(e);
+                    }}
+                    required={formData.assetType !== "CRYPTO" || !cryptoTotalEntry}
+                    readOnly={computedEntryFromTotal !== null && computedEntryFromTotal > 0 && !!cryptoTotalEntry}
+                    className={clsx(computedEntryFromTotal !== null && cryptoTotalEntry && "opacity-60 cursor-default")}
+                  />
                 </div>
                 <div className="form-group">
                   <label htmlFor="exit" className="flex items-center justify-between gap-2">
@@ -393,6 +434,35 @@ export default function RecordTrade() {
                 </div>
               </div>
 
+              {/* Crypto total investment field */}
+              {formData.assetType === "CRYPTO" && (
+                <div className="form-group max-w-sm">
+                  <label htmlFor="cryptoTotalEntry" className="flex items-center justify-between gap-2">
+                    <span>มูลค่ารวมที่ซื้อ ({formData.currency})</span>
+                    <span className="text-[9px] text-textMuted/40 font-normal">คำนวณราคา/เหรียญอัตโนมัติ</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="cryptoTotalEntry"
+                    step="any"
+                    placeholder={`เช่น 5000 ${formData.currency} (แทนการใส่ราคา/เหรียญ)`}
+                    value={cryptoTotalEntry}
+                    onChange={e => {
+                      const total = e.target.value;
+                      setCryptoTotalEntry(total);
+                      if (total) {
+                        setFormData(prev => ({ ...prev, entry: "" }));
+                      }
+                    }}
+                  />
+                  {cryptoTotalEntry && contracts > 0 && (
+                    <div className="text-[10px] text-brand-start/70 mt-1">
+                      ≈ {formData.currency === "THB" ? "฿" : "$"}{((parseFloat(cryptoTotalEntry) || 0) / contracts).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} / เหรียญ
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className={clsx("grid grid-cols-1 gap-4", isOpen ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
                 <div className="form-group">
                   <label htmlFor="contracts">
@@ -402,12 +472,12 @@ export default function RecordTrade() {
                   <input type="number" id="contracts" step="any" min="0" value={formData.contracts} onChange={handleChange} required />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="commissionEntry">ค่าธรรมเนียม ขาเข้า (฿)</label>
+                  <label htmlFor="commissionEntry">ค่าธรรมเนียม ขาเข้า ({isUSD ? formData.currency : '฿'})</label>
                   <input type="number" id="commissionEntry" step="any" placeholder="0" value={formData.commissionEntry} onChange={handleChange} />
                 </div>
                 {!isOpen && (
                   <div className="form-group">
-                    <label htmlFor="commissionExit">ค่าธรรมเนียม ขาออก (฿)</label>
+                    <label htmlFor="commissionExit">ค่าธรรมเนียม ขาออก ({isUSD ? formData.currency : '฿'})</label>
                     <input type="number" id="commissionExit" step="any" placeholder="0" value={formData.commissionExit} onChange={handleChange} />
                   </div>
                 )}
@@ -477,7 +547,9 @@ export default function RecordTrade() {
                 {commissionEntry > 0 && (
                   <div className="flex justify-between items-center px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.06] text-sm">
                     <span className="text-textMuted/60 text-xs">ค่าธรรมเนียมเข้า</span>
-                    <span className="font-mono text-rose-400 text-sm">-฿{commissionEntry.toFixed(2)}</span>
+                    <span className="font-mono text-rose-400 text-sm">
+                      -{isUSD ? `$${commissionEntry.toFixed(2)} (≈ ฿${(commissionEntry * exchangeRate).toFixed(2)})` : `฿${commissionEntry.toFixed(2)}`}
+                    </span>
                   </div>
                 )}
               </div>
@@ -501,13 +573,17 @@ export default function RecordTrade() {
                   </span>
                 </div>
 
-                {totalCommission > 0 && (
+                {totalCommissionTHB > 0 && (
                   <div className="flex justify-between items-center px-3.5 py-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
                     <div>
                       <div className="text-textMuted/60 text-xs">ค่าธรรมเนียมรวม</div>
-                      <div className="text-[10px] text-textMuted/40">เข้า ฿{commissionEntry.toFixed(0)} + ออก ฿{commissionExit.toFixed(0)}</div>
+                      <div className="text-[10px] text-textMuted/40">
+                        {isUSD
+                          ? `${formData.currency} ${(commissionEntry + commissionExit).toFixed(2)} × ${exchangeRate.toFixed(2)}`
+                          : `เข้า ฿${commissionEntry.toFixed(0)} + ออก ฿${commissionExit.toFixed(0)}`}
+                      </div>
                     </div>
-                    <span className="font-mono text-rose-400 text-sm">-฿{totalCommission.toFixed(2)}</span>
+                    <span className="font-mono text-rose-400 text-sm">-฿{totalCommissionTHB.toFixed(2)}</span>
                   </div>
                 )}
 

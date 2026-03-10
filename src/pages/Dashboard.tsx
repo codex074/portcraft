@@ -6,8 +6,10 @@ import { DEFAULT_MULTIPLIERS } from "../lib/constants";
 import type { TradeRecord } from "../types";
 import {
   Wallet, Target, BarChart3, TrendingUp, TrendingDown, Trophy, X,
-  ArrowUpDown, Download, Trash2, Search
+  ArrowUpDown, Download, Trash2, Search, Pencil, Plus, Filter,
+  Calendar, ChevronLeft, ChevronRight
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
 
 // Helper: get commission entry (backward-compat with legacy `commission` field)
@@ -45,15 +47,24 @@ export default function Dashboard() {
   const [allOpenTrades, setAllOpenTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [daysFilter, setDaysFilter] = useState("all");
+  const [dateRangeMode, setDateRangeMode] = useState("all");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const PAGE_SIZE = 20;
+  const [currentPage, setCurrentPage] = useState(1);
   const [currentPrices, setCurrentPrices] = useState<Record<string, string>>({});
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [symbolFilter, setSymbolFilter] = useState("all");
+  const [strategyFilter, setStrategyFilter] = useState("all");
+  const [sideFilter, setSideFilter] = useState("all");
   const [multipliers, setMultipliers] = useState<Record<string, number>>(DEFAULT_MULTIPLIERS);
   const [sortConfig, setSortConfig] = useState<{
     key: keyof TradeRecord | "netPnl";
     direction: "asc" | "desc";
   }>({ key: "date", direction: "desc" });
+
+  const navigate = useNavigate();
 
   const fetchDashboardData = useCallback(async () => {
       if (!user) return;
@@ -102,13 +113,30 @@ export default function Dashboard() {
     fetchSettings();
   }, [user]);
 
+  // Unique filter options
+  const { uniqueSymbols, uniqueStrategies } = useMemo(() => {
+    const syms = new Set<string>();
+    const strats = new Set<string>();
+    allTrades.forEach(t => { syms.add(t.symbol); if (t.strategy) strats.add(t.strategy); });
+    return { uniqueSymbols: Array.from(syms).sort(), uniqueStrategies: Array.from(strats).sort() };
+  }, [allTrades]);
+
+  // Reset page on any filter change
+  useEffect(() => { setCurrentPage(1); }, [
+    searchTerm, symbolFilter, strategyFilter, sideFilter,
+    dateRangeMode, dateStart, dateEnd, sortConfig
+  ]);
+
   // Apply filters
   const { trades, openTrades, filteredAndSortedClosed } = useMemo(() => {
     let closed = allTrades;
     const open = allOpenTrades;
 
-    if (daysFilter !== "all") {
-      const days = parseInt(daysFilter);
+    if (dateRangeMode === "custom") {
+      if (dateStart) closed = closed.filter(t => t.date >= dateStart);
+      if (dateEnd)   closed = closed.filter(t => t.date <= dateEnd);
+    } else if (dateRangeMode !== "all") {
+      const days = parseInt(dateRangeMode);
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - days);
       const cutoffStr = cutoff.toISOString().split('T')[0];
@@ -124,10 +152,13 @@ export default function Dashboard() {
         t.series?.toLowerCase().includes(term) ||
         t.strategy?.toLowerCase().includes(term) ||
         t.notes?.toLowerCase().includes(term) ||
-        (t.assetType && t.assetType.toLowerCase().includes(term)) ||
         t.date.includes(term)
       );
     }
+
+    if (symbolFilter !== "all") result = result.filter(t => t.symbol === symbolFilter);
+    if (strategyFilter !== "all") result = result.filter(t => (t.strategy || 'Unknown') === strategyFilter);
+    if (sideFilter !== "all") result = result.filter(t => t.side === sideFilter);
 
     const sortedResult = [...result].sort((a, b) => {
       const aVal = a[sortConfig.key as keyof TradeRecord];
@@ -139,7 +170,14 @@ export default function Dashboard() {
     });
 
     return { trades: closed, openTrades: open, filteredAndSortedClosed: sortedResult };
-  }, [allTrades, allOpenTrades, daysFilter, searchTerm, sortConfig]);
+  }, [allTrades, allOpenTrades, dateRangeMode, dateStart, dateEnd, searchTerm, symbolFilter, strategyFilter, sideFilter, sortConfig]);
+
+  // Pagination slice
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedClosed.length / PAGE_SIZE));
+  const paginatedTrades = filteredAndSortedClosed.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   const handleDelete = async (id: string) => {
     const result = await Swal.fire({
@@ -238,6 +276,121 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Error closing position:", error);
       Swal.fire("ข้อผิดพลาด", "ไม่สามารถบันทึกการปิดสถานะได้", "error");
+    }
+  };
+
+  const handleEdit = async (trade: TradeRecord) => {
+    const commEntry = getCommEntry(trade);
+    const commExit = getCommExit(trade);
+
+    const { value } = await Swal.fire({
+      title: `แก้ไข ${trade.symbol}${trade.series ? ` ${trade.series}` : ''}`,
+      width: 560,
+      html: `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;text-align:left;">
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">วันที่</div>
+            <input id="e-date" type="date" value="${trade.date}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Series</div>
+            <input id="e-series" type="text" placeholder="M26, H26..." value="${trade.series || ''}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Side</div>
+            <select id="e-side" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+              <option value="Long" ${trade.side === 'Long' ? 'selected' : ''}>Long</option>
+              <option value="Short" ${trade.side === 'Short' ? 'selected' : ''}>Short</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">จำนวนสัญญา</div>
+            <input id="e-contracts" type="number" step="any" value="${trade.contracts}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ราคาเข้า (Entry)</div>
+            <input id="e-entry" type="number" step="any" value="${trade.entry}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ราคาออก (Exit)</div>
+            <input id="e-exit" type="number" step="any" value="${trade.exit ?? ''}" placeholder="ว่าง = Open" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ค่าคอม ขาเข้า (฿)</div>
+            <input id="e-comm-entry" type="number" step="any" value="${commEntry}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">ค่าคอม ขาออก (฿)</div>
+            <input id="e-comm-exit" type="number" step="any" value="${commExit}" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div style="grid-column:span 2;">
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">กลยุทธ์</div>
+            <input id="e-strategy" type="text" value="${trade.strategy || ''}" placeholder="DCA, Breakout..." class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;">
+          </div>
+          <div style="grid-column:span 2;">
+            <div style="font-size:10px;color:#9aa0a6;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">บันทึก</div>
+            <textarea id="e-notes" class="swal2-textarea" style="margin:0;width:100%;box-sizing:border-box;height:60px;resize:vertical;">${trade.notes || ''}</textarea>
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'บันทึกการแก้ไข',
+      cancelButtonText: 'ยกเลิก',
+      confirmButtonColor: '#00d4aa',
+      cancelButtonColor: '#3f3f46',
+      preConfirm: () => {
+        const g = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+        const entry = parseFloat(g('e-entry'));
+        const contracts = parseFloat(g('e-contracts'));
+        const side = g('e-side') as 'Long' | 'Short';
+        const exitStr = g('e-exit');
+        const commEntry = parseFloat(g('e-comm-entry')) || 0;
+        const commExit = parseFloat(g('e-comm-exit')) || 0;
+
+        if (!entry || !contracts) {
+          Swal.showValidationMessage('กรุณากรอกราคาเข้าและจำนวนสัญญา');
+          return false;
+        }
+
+        const hasExit = exitStr !== '' && !isNaN(parseFloat(exitStr));
+        const exit = hasExit ? parseFloat(exitStr) : undefined;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updateData: Record<string, any> = {
+          date: g('e-date'),
+          series: g('e-series') || undefined,
+          side, entry, contracts,
+          commissionEntry: commEntry,
+          commissionExit: commExit,
+          strategy: g('e-strategy') || undefined,
+          notes: g('e-notes') || undefined,
+          status: hasExit ? 'closed' : 'open',
+        };
+
+        if (hasExit && exit !== undefined) {
+          const diff = exit - entry;
+          const pts = side === 'Long' ? diff : -diff;
+          const mult = multipliers[trade.symbol] || DEFAULT_MULTIPLIERS.Other || 1;
+          const pnlBaht = pts * mult * contracts;
+          const netPnl = pnlBaht - commEntry - commExit;
+          updateData.exit = exit;
+          updateData.points = Number(pts.toFixed(4));
+          updateData.pnlBaht = Number(pnlBaht.toFixed(2));
+          updateData.netPnl = Number(netPnl.toFixed(2));
+        }
+
+        return updateData;
+      }
+    });
+
+    if (!value) return;
+    try {
+      await updateDoc(doc(db, 'trades', trade.id!), value);
+      Swal.fire({ icon: 'success', title: 'แก้ไขสำเร็จ', showConfirmButton: false, timer: 1500 });
+      await fetchDashboardData();
+    } catch (error) {
+      console.error('Error updating trade:', error);
+      Swal.fire('ข้อผิดพลาด', 'ไม่สามารถแก้ไขข้อมูลได้', 'error');
     }
   };
 
@@ -408,16 +561,46 @@ export default function Dashboard() {
           <h2 className="text-2xl font-bold">TFEX Dashboard</h2>
           <p className="text-textMuted text-sm mt-1">สรุปข้อมูลการลงทุน สายเก็งกำไร TFEX</p>
         </div>
-        <select
-          className="w-full sm:w-auto !py-2 text-sm"
-          value={daysFilter}
-          onChange={(e) => setDaysFilter(e.target.value)}
-        >
-          <option value="all">ทุกช่วงเวลา</option>
-          <option value="7">7 วันล่าสุด</option>
-          <option value="30">30 วันล่าสุด</option>
-          <option value="90">90 วันล่าสุด</option>
-        </select>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-wrap">
+          <button
+            onClick={() => navigate('/record')}
+            className="btn btn-primary !py-2 text-sm whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4" /> เพิ่มการเทรด TFEX
+          </button>
+          <select
+            className="w-full sm:w-auto !py-2 text-sm"
+            value={dateRangeMode}
+            onChange={(e) => {
+              setDateRangeMode(e.target.value);
+              if (e.target.value !== "custom") { setDateStart(""); setDateEnd(""); }
+            }}
+          >
+            <option value="all">ทุกช่วงเวลา</option>
+            <option value="7">7 วันล่าสุด</option>
+            <option value="30">30 วันล่าสุด</option>
+            <option value="90">90 วันล่าสุด</option>
+            <option value="custom">กำหนดเอง...</option>
+          </select>
+          {dateRangeMode === "custom" && (
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-textMuted/50 flex-shrink-0" />
+              <input
+                type="date"
+                value={dateStart}
+                onChange={e => setDateStart(e.target.value)}
+                className="!py-2 !px-2.5 text-sm w-36"
+              />
+              <span className="text-textMuted/40 text-sm">—</span>
+              <input
+                type="date"
+                value={dateEnd}
+                onChange={e => setDateEnd(e.target.value)}
+                className="!py-2 !px-2.5 text-sm w-36"
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Summary Stat Cards */}
@@ -483,24 +666,74 @@ export default function Dashboard() {
 
       {/* Closed Trades Table */}
       <div className="card !p-0 overflow-hidden">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-5 border-b border-gray-100 dark:border-white/[0.06]">
-          <h3 className="font-semibold">ประวัติที่ปิดสถานะแล้ว</h3>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-            <div className="relative flex-1 sm:flex-none">
-              <Search className="w-4 h-4 text-textMuted/60 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="ค้นหา..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="!pl-9 !py-2 w-full sm:w-48 text-sm"
-              />
+        <div className="flex flex-col gap-3 p-5 border-b border-gray-100 dark:border-white/[0.06]">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <h3 className="font-semibold flex items-center gap-2">
+              ประวัติที่ปิดสถานะแล้ว
+              {filteredAndSortedClosed.length !== trades.length && (
+                <span className="text-[11px] text-brand-start font-normal bg-brand-start/8 px-1.5 py-0.5 rounded">
+                  {filteredAndSortedClosed.length}/{trades.length}
+                </span>
+              )}
+            </h3>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+              <div className="relative flex-1 sm:flex-none">
+                <Search className="w-4 h-4 text-textMuted/60 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="ค้นหา..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="!pl-9 !py-2 w-full sm:w-44 text-sm"
+                />
+              </div>
+              <button onClick={exportCSV} className="btn btn-secondary !py-2 text-xs whitespace-nowrap justify-center">
+                <Download className="w-3.5 h-3.5" /> Export
+              </button>
             </div>
-            <button onClick={exportCSV} className="btn btn-secondary !py-2 text-xs whitespace-nowrap justify-center">
-              <Download className="w-3.5 h-3.5" /> Export
-            </button>
+          </div>
+          {/* Extra filters */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <Filter className="w-3.5 h-3.5 text-textMuted/40 flex-shrink-0" />
+            <select
+              value={symbolFilter}
+              onChange={e => setSymbolFilter(e.target.value)}
+              className="!py-1.5 !px-2.5 text-xs w-auto flex-none"
+            >
+              <option value="all">Symbol: ทั้งหมด</option>
+              {uniqueSymbols.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select
+              value={strategyFilter}
+              onChange={e => setStrategyFilter(e.target.value)}
+              className="!py-1.5 !px-2.5 text-xs w-auto flex-none"
+            >
+              <option value="all">Strategy: ทั้งหมด</option>
+              {uniqueStrategies.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select
+              value={sideFilter}
+              onChange={e => setSideFilter(e.target.value)}
+              className="!py-1.5 !px-2.5 text-xs w-auto flex-none"
+            >
+              <option value="all">Side: ทั้งหมด</option>
+              <option value="Long">Long</option>
+              <option value="Short">Short</option>
+            </select>
+            {(symbolFilter !== "all" || strategyFilter !== "all" || sideFilter !== "all" || searchTerm) && (
+              <button
+                onClick={() => {
+                  setSymbolFilter("all"); setStrategyFilter("all");
+                  setSideFilter("all"); setSearchTerm("");
+                }}
+                className="text-[11px] text-textMuted/50 hover:text-rose-400 transition-colors px-2 py-1 rounded-lg hover:bg-rose-400/10"
+              >
+                ล้างตัวกรอง
+              </button>
+            )}
           </div>
         </div>
+        {/* Count badge */}
         <div className="table-wrapper">
           <table className="data-table">
             <thead>
@@ -530,7 +763,7 @@ export default function Dashboard() {
                   <td colSpan={11} className="text-center py-16 text-textMuted/60 text-sm">ยังไม่มีข้อมูล</td>
                 </tr>
               ) : (
-                filteredAndSortedClosed.map(trade => (
+                paginatedTrades.map(trade => (
                   <tr key={trade.id}>
                     <td className="whitespace-nowrap font-mono text-xs text-textMuted">{trade.date}</td>
                     <td>
@@ -560,13 +793,22 @@ export default function Dashboard() {
                     </td>
                     <td className="text-xs text-textMuted/60">{trade.strategy || "—"}</td>
                     <td className="text-center">
-                      <button
-                        onClick={() => trade.id && handleDelete(trade.id)}
-                        className="p-1.5 text-textMuted/40 hover:text-rose-400 hover:bg-rose-400/10 rounded-lg transition-colors"
-                        title="ลบ"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => handleEdit(trade)}
+                          className="p-1.5 text-textMuted/40 hover:text-brand-start hover:bg-brand-start/10 rounded-lg transition-colors"
+                          title="แก้ไข"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => trade.id && handleDelete(trade.id)}
+                          className="p-1.5 text-textMuted/40 hover:text-rose-400 hover:bg-rose-400/10 rounded-lg transition-colors"
+                          title="ลบ"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -574,6 +816,59 @@ export default function Dashboard() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {filteredAndSortedClosed.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-white/[0.06]">
+            <span className="text-xs text-textMuted/60">
+              แสดง {((currentPage - 1) * PAGE_SIZE) + 1}–{Math.min(currentPage * PAGE_SIZE, filteredAndSortedClosed.length)} จาก {filteredAndSortedClosed.length} รายการ
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-1.5 rounded-lg text-textMuted/60 hover:text-white hover:bg-white/[0.06] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+
+              {/* Page numbers */}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                  if (idx > 0 && (arr[idx - 1] as number) + 1 < p) acc.push("...");
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, idx) =>
+                  p === "..." ? (
+                    <span key={`dot-${idx}`} className="px-1 text-xs text-textMuted/40">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => setCurrentPage(p as number)}
+                      className={clsx(
+                        "min-w-[30px] h-[30px] px-1 rounded-lg text-xs font-medium transition-colors",
+                        currentPage === p
+                          ? "bg-brand-start/15 text-brand-start border border-brand-start/30"
+                          : "text-textMuted/60 hover:text-white hover:bg-white/[0.06]"
+                      )}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-1.5 rounded-lg text-textMuted/60 hover:text-white hover:bg-white/[0.06] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

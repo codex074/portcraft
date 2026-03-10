@@ -1,7 +1,8 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { LayoutDashboard, PlusCircle, Settings, LogOut, Briefcase } from "lucide-react";
+import { useExchangeRate } from "../contexts/ExchangeRateContext";
+import { LayoutDashboard, PlusCircle, Settings, LogOut, Briefcase, LineChart, ArrowRightLeft, RefreshCw } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import clsx from "clsx";
 
@@ -13,10 +14,12 @@ interface SidebarProps {
 export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const { user, logout } = useAuth();
   const { isDark } = useTheme();
+  const { usdThbRate, rateLoading, rateLastUpdated, fetchExchangeRate } = useExchangeRate();
 
   const navItems = [
     { to: "/portfolio", icon: Briefcase, label: "Portfolio" },
     { to: "/dashboard", icon: LayoutDashboard, label: "TFEX" },
+    { to: "/performance", icon: LineChart, label: "Performance" },
     { to: "/record", icon: PlusCircle, label: "บันทึกรายการ" },
     { to: "/settings", icon: Settings, label: "ตั้งค่า" },
   ];
@@ -119,6 +122,43 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
         {/* Footer */}
         <div className="px-3 pb-4 space-y-3">
+
+          {/* USD/THB Rate */}
+          <div
+            className="flex items-center justify-between px-3 py-2.5 rounded-xl"
+            style={{
+              background: isDark ? 'rgba(139,92,246,0.07)' : 'rgba(139,92,246,0.05)',
+              border: `1px solid ${isDark ? 'rgba(139,92,246,0.14)' : 'rgba(139,92,246,0.12)'}`,
+            }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <ArrowRightLeft className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: isDark ? '#666' : '#9ca3af' }}>USD / THB</div>
+                <div className="font-mono font-bold text-sm text-purple-400 leading-tight">
+                  {usdThbRate ? usdThbRate.toFixed(4) : "—"}
+                </div>
+                {rateLastUpdated && (
+                  <div className="text-[9px] font-mono truncate" style={{ color: isDark ? '#555' : '#bbb' }}>
+                    {rateLastUpdated.toLocaleTimeString('th-TH')}
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={fetchExchangeRate}
+              disabled={rateLoading}
+              title="รีเฟรชอัตราแลกเปลี่ยน"
+              className={clsx(
+                "w-7 h-7 flex items-center justify-center rounded-lg transition-all duration-200 flex-shrink-0",
+                rateLoading ? "opacity-50 cursor-not-allowed" : "hover:bg-purple-500/10 cursor-pointer"
+              )}
+              style={{ color: isDark ? '#888' : '#a78bfa' }}
+            >
+              <RefreshCw className={clsx("w-3 h-3", rateLoading && "animate-spin")} />
+            </button>
+          </div>
+
           {/* Theme toggle */}
           <div className="flex items-center justify-between px-3 py-1.5">
             <span className="text-[11px] font-medium" style={{ color: isDark ? '#666' : '#9ca3af' }}>โหมด</span>
